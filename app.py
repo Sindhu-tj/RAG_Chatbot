@@ -1,5 +1,5 @@
 import streamlit as st
-from rag_engine import load_and_index, build_qa_chain, ask_question
+from main import load_and_index, build_qa_chain, ask_question
 
 # -----------------------------
 # Page Configuration
