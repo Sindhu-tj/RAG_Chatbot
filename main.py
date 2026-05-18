@@ -1,3 +1,7 @@
+import streamlit as st
+import tempfile
+import os
+
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -10,8 +14,15 @@ from langchain_core.output_parsers import StrOutputParser
 
 from transformers import pipeline
 
-import tempfile
-import os
+
+# ==========================================
+# PAGE CONFIG
+# ==========================================
+st.set_page_config(
+    page_title="PDF RAG Chatbot",
+    page_icon="📄",
+    layout="wide"
+)
 
 
 # ==========================================
@@ -19,19 +30,15 @@ import os
 # ==========================================
 def load_and_index(pdf_file):
 
-    # Save uploaded PDF temporarily
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp.write(pdf_file.read())
         tmp_path = tmp.name
 
-    # Load PDF
     loader = PyPDFLoader(tmp_path)
     documents = loader.load()
 
-    # Delete temp file
     os.unlink(tmp_path)
 
-    # Split documents into chunks
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=500,
         chunk_overlap=50
@@ -39,12 +46,10 @@ def load_and_index(pdf_file):
 
     chunks = splitter.split_documents(documents)
 
-    # Embedding model
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
 
-    # Create FAISS vector database
     vectorstore = FAISS.from_documents(
         chunks,
         embeddings
@@ -54,11 +59,10 @@ def load_and_index(pdf_file):
 
 
 # ==========================================
-# BUILD RAG QA CHAIN
+# BUILD QA CHAIN
 # ==========================================
 def build_qa_chain(vectorstore):
 
-    # LLM Pipeline
     pipe = pipeline(
         "text2text-generation",
         model="google/flan-t5-base",
@@ -66,17 +70,14 @@ def build_qa_chain(vectorstore):
         temperature=0.3
     )
 
-    # Wrap with LangChain
     llm = HuggingFacePipeline(
         pipeline=pipe
     )
 
-    # Retriever
     retriever = vectorstore.as_retriever(
         search_kwargs={"k": 3}
     )
 
-    # Prompt template
     prompt = PromptTemplate.from_template(
         """
 You are an intelligent AI assistant.
@@ -96,13 +97,11 @@ Answer:
 """
     )
 
-    # Convert docs to text
     def format_docs(docs):
         return "\n\n".join(
             doc.page_content for doc in docs
         )
 
-    # Build RAG chain
     chain = (
         {
             "context": retriever | format_docs,
@@ -121,10 +120,48 @@ Answer:
 # ==========================================
 def ask_question(chain, retriever, question):
 
-    # Generate answer
     answer = chain.invoke(question)
-
-    # Retrieve source chunks
     source_docs = retriever.invoke(question)
 
     return answer, source_docs
+
+
+# ==========================================
+# STREAMLIT UI
+# ==========================================
+st.title("📄 PDF RAG Chatbot")
+st.write("Upload a PDF and ask questions from it.")
+
+uploaded_file = st.file_uploader(
+    "Upload your PDF",
+    type="pdf"
+)
+
+if uploaded_file:
+
+    with st.spinner("Processing PDF..."):
+        vectorstore = load_and_index(uploaded_file)
+        chain, retriever = build_qa_chain(vectorstore)
+
+    st.success("PDF uploaded successfully!")
+
+    question = st.text_input(
+        "Ask a question about the PDF"
+    )
+
+    if question:
+
+        with st.spinner("Generating answer..."):
+            answer, source_docs = ask_question(
+                chain,
+                retriever,
+                question
+            )
+
+        st.subheader("Answer")
+        st.write(answer)
+
+        with st.expander("View Source Context"):
+            for doc in source_docs:
+                st.write(doc.page_content)
+                st.divider()
