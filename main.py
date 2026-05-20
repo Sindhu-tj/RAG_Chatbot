@@ -38,21 +38,11 @@ st.markdown("""
 h1 {
     color: white;
     text-align: center;
-    font-size: 55px;
-}
-
-p {
-    color: #cbd5e1;
+    font-size: 50px;
 }
 
 .stTextInput input {
     background-color: #1e293b;
-    color: white;
-    border-radius: 10px;
-}
-
-.stButton button {
-    background-color: #2563eb;
     color: white;
     border-radius: 10px;
 }
@@ -67,12 +57,12 @@ p {
 st.markdown("# 📄 AI-Powered RAG PDF Chatbot")
 
 st.write(
-    "Upload a PDF and ask intelligent questions using Retrieval-Augmented Generation (RAG)."
+    "Upload a PDF and ask questions based only on the PDF."
 )
 
 
 # ==========================================
-# LOAD PDF
+# LOAD PDF + VECTOR DB
 # ==========================================
 def load_and_index(pdf_file):
 
@@ -85,8 +75,9 @@ def load_and_index(pdf_file):
 
     os.unlink(tmp_path)
 
+    # Better chunking
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
+        chunk_size=250,
         chunk_overlap=50
     )
 
@@ -112,24 +103,34 @@ def build_qa_chain(vectorstore):
     pipe = pipeline(
         "text2text-generation",
         model="google/flan-t5-base",
-        max_new_tokens=256,
-        temperature=0.2
+        max_new_tokens=120,
+        temperature=0.1
     )
 
     llm = HuggingFacePipeline(
         pipeline=pipe
     )
 
+    # Better retrieval
     retriever = vectorstore.as_retriever(
-        search_kwargs={"k": 2}
+        search_type="similarity",
+        search_kwargs={"k": 5}
     )
 
     prompt = PromptTemplate.from_template(
         """
-Answer ONLY from the provided context.
+You are an intelligent PDF assistant.
 
-If the answer is not clearly present in the context, reply exactly:
+You MUST answer ONLY using the provided context.
 
+Rules:
+1. Never guess.
+2. Never add outside information.
+3. Give short and precise answers.
+4. For projects → list project names only.
+5. For skills → list only skills.
+6. For certifications → list only certifications.
+7. If answer is missing, say exactly:
 "I could not find that information in the PDF."
 
 Context:
@@ -144,7 +145,7 @@ Answer:
 
     def format_docs(docs):
         return "\n\n".join(
-            doc.page_content for doc in docs
+            [doc.page_content for doc in docs]
         )
 
     chain = (
@@ -165,22 +166,11 @@ Answer:
 # ==========================================
 def ask_question(chain, retriever, question):
 
-    docs = retriever.invoke(question)
-
-    context = " ".join(
-        [doc.page_content.lower() for doc in docs]
-    )
-
-    # Simple validation
-    if (
-        "mern" in question.lower()
-        and "mern" not in context
-    ):
-        return "I could not find that information in the PDF.", docs
+    source_docs = retriever.invoke(question)
 
     answer = chain.invoke(question)
 
-    return answer, docs
+    return answer, source_docs
 
 
 # ==========================================
@@ -201,18 +191,15 @@ if uploaded_file:
 
         vectorstore = load_and_index(uploaded_file)
 
-        chain, retriever = build_qa_chain(vectorstore)
+        chain, retriever = build_qa_chain(
+            vectorstore
+        )
 
     st.success("PDF uploaded successfully!")
 
-
-    # ==========================================
-    # QUESTION INPUT
-    # ==========================================
     question = st.text_input(
         "Ask a question about the PDF"
     )
-
 
     if question:
 
@@ -225,13 +212,11 @@ if uploaded_file:
             )
 
         st.subheader("Answer")
-
         st.write(answer)
 
-        # ==========================================
-        # SOURCE CHUNKS
-        # ==========================================
-        with st.expander("📌 Source Chunks Used"):
+        with st.expander(
+            "📌 Source Chunks Used"
+        ):
 
             for i, doc in enumerate(source_docs):
 
@@ -239,6 +224,8 @@ if uploaded_file:
                     f"### Chunk {i+1}"
                 )
 
-                st.write(doc.page_content)
+                st.write(
+                    doc.page_content
+                )
 
                 st.divider()
