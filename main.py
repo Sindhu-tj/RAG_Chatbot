@@ -1,16 +1,17 @@
 import streamlit as st
 import tempfile
 import os
+import pandas as pd
+import easyocr
+from PIL import Image
+from docx import Document
+from pptx import Presentation
 
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.schema import Document as LangDocument
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_community.llms import HuggingFacePipeline
-
-from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.output_parsers import StrOutputParser
 
 from transformers import pipeline
 
@@ -19,76 +20,210 @@ from transformers import pipeline
 # PAGE CONFIG
 # ==========================================
 st.set_page_config(
-    page_title="AI RAG PDF Chatbot",
-    page_icon="📄",
+    page_title="Universal AI File Chatbot",
+    page_icon="🤖",
     layout="wide"
 )
 
-
 # ==========================================
-# CUSTOM CSS
+# UI
 # ==========================================
-st.markdown("""
-<style>
-
-.main {
-    background-color: #0e1117;
-}
-
-h1 {
-    color: white;
-    text-align: center;
-    font-size: 50px;
-}
-
-.stTextInput input {
-    background-color: #1e293b;
-    color: white;
-    border-radius: 10px;
-}
-
-</style>
-""", unsafe_allow_html=True)
-
-
-# ==========================================
-# TITLE
-# ==========================================
-st.markdown("# 📄 AI-Powered RAG PDF Chatbot")
+st.title("🤖 Universal AI File Chatbot")
 
 st.write(
-    "Upload a PDF and ask questions based only on the PDF."
+    "Upload PDF, DOCX, TXT, CSV, XLSX, PPTX or Image and ask questions."
 )
 
 
 # ==========================================
-# LOAD PDF + VECTOR DB
+# EXTRACT TEXT
 # ==========================================
-def load_and_index(pdf_file):
+def extract_text(uploaded_file):
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        tmp.write(pdf_file.read())
-        tmp_path = tmp.name
+    file_type = uploaded_file.name.split(".")[-1].lower()
 
-    loader = PyPDFLoader(tmp_path)
-    documents = loader.load()
+    text = ""
 
-    os.unlink(tmp_path)
+    try:
 
-    # Better chunking
+        # PDF
+        if file_type == "pdf":
+
+            with tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=".pdf"
+            ) as tmp:
+
+                tmp.write(
+                    uploaded_file.read()
+                )
+
+                tmp_path = tmp.name
+
+            loader = PyPDFLoader(
+                tmp_path
+            )
+
+            docs = loader.load()
+
+            text = "\n".join(
+                [
+                    doc.page_content
+                    for doc in docs
+                ]
+            )
+
+            os.unlink(tmp_path)
+
+        # DOCX
+        elif file_type == "docx":
+
+            doc = Document(
+                uploaded_file
+            )
+
+            text = "\n".join(
+                [
+                    para.text
+                    for para in doc.paragraphs
+                    if para.text.strip()
+                ]
+            )
+
+        # TXT
+        elif file_type == "txt":
+
+            text = uploaded_file.read().decode(
+                "utf-8",
+                errors="ignore"
+            )
+
+        # CSV
+        elif file_type == "csv":
+
+            df = pd.read_csv(
+                uploaded_file
+            )
+
+            text = df.to_string()
+
+        # XLSX
+        elif file_type == "xlsx":
+
+            df = pd.read_excel(
+                uploaded_file
+            )
+
+            text = df.to_string()
+
+        # PPTX
+        elif file_type == "pptx":
+
+            prs = Presentation(
+                uploaded_file
+            )
+
+            slide_text = []
+
+            for slide in prs.slides:
+
+                for shape in slide.shapes:
+
+                    if hasattr(
+                        shape,
+                        "text"
+                    ):
+
+                        if shape.text.strip():
+
+                            slide_text.append(
+                                shape.text
+                            )
+
+            text = "\n".join(
+                slide_text
+            )
+
+        # IMAGE OCR
+        elif file_type in [
+            "png",
+            "jpg",
+            "jpeg"
+        ]:
+
+            image = Image.open(
+                uploaded_file
+            )
+
+            reader = easyocr.Reader(
+                ['en'],
+                gpu=False
+            )
+
+            results = reader.readtext(
+                image
+            )
+
+            text = "\n".join(
+                [
+                    result[1]
+                    for result in results
+                ]
+            )
+
+        return text.strip()
+
+    except Exception as e:
+
+        st.error(
+            f"Error reading file: {str(e)}"
+        )
+
+        return ""
+
+
+# ==========================================
+# CREATE VECTORSTORE
+# ==========================================
+@st.cache_resource
+def create_vectorstore(text):
+
+    if not text:
+
+        return None
+
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=250,
-        chunk_overlap=50
+        chunk_size=800,
+        chunk_overlap=150
     )
 
-    chunks = splitter.split_documents(documents)
+    chunks = splitter.split_text(
+        text
+    )
+
+    chunks = [
+        chunk.strip()
+        for chunk in chunks
+        if chunk.strip()
+    ]
+
+    if len(chunks) == 0:
+
+        return None
+
+    docs = [
+        LangDocument(
+            page_content=chunk
+        )
+        for chunk in chunks
+    ]
 
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
 
     vectorstore = FAISS.from_documents(
-        chunks,
+        docs,
         embeddings
     )
 
@@ -96,42 +231,56 @@ def load_and_index(pdf_file):
 
 
 # ==========================================
-# BUILD QA CHAIN
+# LOAD MODEL
 # ==========================================
-def build_qa_chain(vectorstore):
+@st.cache_resource
+def load_model():
 
     pipe = pipeline(
         "text2text-generation",
         model="google/flan-t5-base",
-        max_new_tokens=120,
+        max_new_tokens=200,
+        do_sample=True,
         temperature=0.1
     )
 
-    llm = HuggingFacePipeline(
-        pipeline=pipe
-    )
+    return pipe
 
-    # Better retrieval
+
+# ==========================================
+# ASK QUESTION
+# ==========================================
+def ask_question(
+    vectorstore,
+    question,
+    model
+):
+
     retriever = vectorstore.as_retriever(
-        search_type="similarity",
-        search_kwargs={"k": 5}
+        search_kwargs={"k": 4}
     )
 
-    prompt = PromptTemplate.from_template(
-        """
-You are an intelligent PDF assistant.
+    docs = retriever.invoke(
+        question
+    )
 
-You MUST answer ONLY using the provided context.
+    context = "\n\n".join(
+        [
+            doc.page_content
+            for doc in docs
+        ]
+    )
+
+    prompt = f"""
+You are an intelligent assistant.
+
+Answer ONLY using the uploaded file content.
 
 Rules:
-1. Never guess.
-2. Never add outside information.
-3. Give short and precise answers.
-4. For projects → list project names only.
-5. For skills → list only skills.
-6. For certifications → list only certifications.
-7. If answer is missing, say exactly:
-"I could not find that information in the PDF."
+1. Do not guess.
+2. Do not hallucinate.
+3. If answer is unavailable say:
+"I could not find that information in the uploaded file."
 
 Context:
 {context}
@@ -141,91 +290,105 @@ Question:
 
 Answer:
 """
-    )
 
-    def format_docs(docs):
-        return "\n\n".join(
-            [doc.page_content for doc in docs]
-        )
+    response = model(
+        prompt
+    )[0]["generated_text"]
 
-    chain = (
-        {
-            "context": retriever | format_docs,
-            "question": RunnablePassthrough()
-        }
-        | prompt
-        | llm
-        | StrOutputParser()
-    )
-
-    return chain, retriever
+    return response, docs
 
 
 # ==========================================
-# ASK QUESTION
-# ==========================================
-def ask_question(chain, retriever, question):
-
-    source_docs = retriever.invoke(question)
-
-    answer = chain.invoke(question)
-
-    return answer, source_docs
-
-
-# ==========================================
-# FILE UPLOAD
+# FILE UPLOADER
 # ==========================================
 uploaded_file = st.file_uploader(
-    "Upload your PDF",
-    type="pdf"
+    "Upload File",
+    type=[
+        "pdf",
+        "docx",
+        "txt",
+        "csv",
+        "xlsx",
+        "pptx",
+        "png",
+        "jpg",
+        "jpeg"
+    ]
 )
 
-
 # ==========================================
-# PROCESS PDF
+# MAIN APP
 # ==========================================
 if uploaded_file:
 
-    with st.spinner("Reading PDF and building AI knowledge base..."):
+    with st.spinner(
+        "Reading file..."
+    ):
 
-        vectorstore = load_and_index(uploaded_file)
-
-        chain, retriever = build_qa_chain(
-            vectorstore
+        text = extract_text(
+            uploaded_file
         )
 
-    st.success("PDF uploaded successfully!")
+    if not text:
 
-    question = st.text_input(
-        "Ask a question about the PDF"
-    )
+        st.error(
+            "No readable content found in file."
+        )
 
-    if question:
+    else:
 
-        with st.spinner("Generating answer..."):
-
-            answer, source_docs = ask_question(
-                chain,
-                retriever,
-                question
-            )
-
-        st.subheader("Answer")
-        st.write(answer)
-
-        with st.expander(
-            "📌 Source Chunks Used"
+        with st.spinner(
+            "Creating AI knowledge base..."
         ):
 
-            for i, doc in enumerate(source_docs):
+            vectorstore = create_vectorstore(
+                text
+            )
 
-                st.markdown(
-                    f"### Chunk {i+1}"
+            model = load_model()
+
+        st.success(
+            "File uploaded successfully!"
+        )
+
+        question = st.text_input(
+            "Ask a question"
+        )
+
+        if question:
+
+            with st.spinner(
+                "Generating answer..."
+            ):
+
+                answer, docs = ask_question(
+                    vectorstore,
+                    question,
+                    model
                 )
 
-                st.write(
-                    doc.page_content
-                )
+            st.subheader(
+                "Answer"
+            )
 
-                st.divider()
+            st.write(
+                answer
+            )
+
+            with st.expander(
+                "📌 Source Chunks Used"
+            ):
+
+                for i, doc in enumerate(
+                    docs
+                ):
+
+                    st.markdown(
+                        f"### Chunk {i+1}"
+                    )
+
+                    st.write(
+                        doc.page_content
+                    )
+
+                    st.divider()
