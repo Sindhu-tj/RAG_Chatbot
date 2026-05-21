@@ -1,5 +1,4 @@
 import streamlit as st
-from main import load_and_index, build_qa_chain, ask_question
 
 # -----------------------------
 # Page Configuration
