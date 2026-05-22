@@ -123,7 +123,9 @@ def extract_text(uploaded_file):
 
             df = pd.read_csv(uploaded_file)
 
-            text = df.head(100).to_csv(index=False)
+            df = df.astype(str)
+
+            text = df.to_csv(index=False)
 
         # =================================================
         # XLSX
@@ -132,7 +134,9 @@ def extract_text(uploaded_file):
 
             df = pd.read_excel(uploaded_file)
 
-            text = df.head(100).to_csv(index=False)
+            df = df.astype(str)
+
+            text = df.to_csv(index=False)
 
         # =================================================
         # PPTX
@@ -190,8 +194,8 @@ def extract_text(uploaded_file):
 def create_vectorstore(text):
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200
+        chunk_size=1200,
+        chunk_overlap=250
     )
 
     chunks = splitter.split_text(text)
@@ -227,10 +231,10 @@ def load_model():
 
     pipe = pipeline(
         "text2text-generation",
-        model="google/flan-t5-large",
+        model="google/flan-t5-xl",
         max_new_tokens=256,
-        temperature=0.2,
-        do_sample=True
+        temperature=0.0,
+        do_sample=False
     )
 
     return pipe
@@ -246,7 +250,7 @@ def ask_question(
 ):
 
     retriever = vectorstore.as_retriever(
-        search_kwargs={"k": 12}
+        search_kwargs={"k": 5}
     )
 
     docs = retriever.invoke(question)
@@ -257,20 +261,23 @@ def ask_question(
     ])
 
     prompt = f"""
-You are a smart AI assistant for uploaded files.
+You are a highly intelligent AI assistant.
 
-You must understand:
+You MUST understand:
 - broken English
 - spelling mistakes
 - short questions
 - mixed English
-- informal language
+- informal typing
 
-Your job:
-1. Read the context carefully
-2. Understand what the user means
-3. Answer clearly from the uploaded file
-4. If exact answer not found, give the closest meaningful answer from the file
+Your task:
+1. Understand what the user means
+2. Read the context carefully
+3. Answer naturally and accurately
+4. Use ONLY uploaded file information
+5. Do NOT hallucinate
+6. If answer is not available say:
+"I could not find that information in the uploaded file."
 
 Context:
 {context}
@@ -278,12 +285,11 @@ Context:
 User Question:
 {question}
 
-Helpful Answer:
+Accurate Helpful Answer:
 """
 
     result = model(
-        prompt,
-        max_new_tokens=200
+        prompt
     )[0]["generated_text"]
 
     return result, docs
@@ -350,7 +356,7 @@ if uploaded_file:
 
                     st.markdown(f"### Chunk {i+1}")
 
-                    st.write(doc.page_content[:1000])
+                    st.write(doc.page_content[:1500])
 
                     st.divider()
 
