@@ -125,7 +125,7 @@ def extract_text(uploaded_file):
 
             df = df.astype(str)
 
-            text = df.to_csv(index=False)
+            text = df.to_string(index=False)
 
         # =================================================
         # XLSX
@@ -136,7 +136,7 @@ def extract_text(uploaded_file):
 
             df = df.astype(str)
 
-            text = df.to_csv(index=False)
+            text = df.to_string(index=False)
 
         # =================================================
         # PPTX
@@ -182,7 +182,7 @@ def extract_text(uploaded_file):
 
     except Exception as e:
 
-        st.error(f"Error reading file: {e}")
+        st.error(f"❌ Error reading file: {e}")
 
         return ""
 
@@ -194,8 +194,8 @@ def extract_text(uploaded_file):
 def create_vectorstore(text):
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1200,
-        chunk_overlap=250
+        chunk_size=800,
+        chunk_overlap=150
     )
 
     chunks = splitter.split_text(text)
@@ -231,9 +231,9 @@ def load_model():
 
     pipe = pipeline(
         "text2text-generation",
-        model="google/flan-t5-xl",
-        max_new_tokens=256,
-        temperature=0.0,
+        model="google/flan-t5-base",
+        max_new_tokens=120,
+        temperature=0.1,
         do_sample=False
     )
 
@@ -250,7 +250,7 @@ def ask_question(
 ):
 
     retriever = vectorstore.as_retriever(
-        search_kwargs={"k": 5}
+        search_kwargs={"k": 4}
     )
 
     docs = retriever.invoke(question)
@@ -260,37 +260,37 @@ def ask_question(
         for doc in docs
     ])
 
+    # =====================================================
+    # SMART PROMPT
+    # =====================================================
     prompt = f"""
-You are a highly intelligent AI assistant.
+You are an intelligent AI assistant.
 
-You MUST understand:
-- broken English
-- spelling mistakes
-- short questions
-- mixed English
-- informal typing
+Understand user questions even if:
+- grammar is wrong
+- spelling is wrong
+- broken English is used
+- short questions are used
 
-Your task:
-1. Understand what the user means
-2. Read the context carefully
-3. Answer naturally and accurately
-4. Use ONLY uploaded file information
-5. Do NOT hallucinate
-6. If answer is not available say:
+Answer ONLY from the uploaded file context.
+
+Rules:
+- Give clear and accurate answers
+- Do not hallucinate
+- Keep answer short and meaningful
+- If answer is unavailable say:
 "I could not find that information in the uploaded file."
 
 Context:
 {context}
 
-User Question:
+Question:
 {question}
 
-Accurate Helpful Answer:
+Answer:
 """
 
-    result = model(
-        prompt
-    )[0]["generated_text"]
+    result = model(prompt)[0]["generated_text"]
 
     return result, docs
 
@@ -324,7 +324,7 @@ if uploaded_file:
 
     if text:
 
-        with st.spinner("🧠 Creating AI knowledge base..."):
+        with st.spinner("🧠 Building AI knowledge base..."):
 
             vectorstore = create_vectorstore(text)
 
@@ -332,13 +332,23 @@ if uploaded_file:
 
         st.success("✅ File uploaded successfully!")
 
+        # =================================================
+        # OPTIONAL PREVIEW
+        # =================================================
+        with st.expander("📄 File Preview"):
+
+            st.write(text[:3000])
+
+        # =================================================
+        # QUESTION INPUT
+        # =================================================
         question = st.text_input(
             "💬 Ask a question"
         )
 
         if question:
 
-            with st.spinner("🔍 Generating answer..."):
+            with st.spinner("🔍 Finding answer..."):
 
                 answer, docs = ask_question(
                     vectorstore,
@@ -346,17 +356,23 @@ if uploaded_file:
                     model
                 )
 
-            st.subheader("Answer")
+            # =============================================
+            # ANSWER
+            # =============================================
+            st.subheader("🤖 Answer")
 
             st.write(answer)
 
+            # =============================================
+            # SOURCE CHUNKS
+            # =============================================
             with st.expander("📌 Source Chunks Used"):
 
                 for i, doc in enumerate(docs):
 
                     st.markdown(f"### Chunk {i+1}")
 
-                    st.write(doc.page_content[:1500])
+                    st.write(doc.page_content[:1000])
 
                     st.divider()
 
@@ -366,4 +382,4 @@ if uploaded_file:
 
 else:
 
-    st.info("📂 Upload a file to begin.")
+    st.info("📂 Upload a PDF, Excel, Word, PPT or Image file.")
