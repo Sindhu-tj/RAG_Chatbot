@@ -184,14 +184,14 @@ def extract_text(uploaded_file):
 
 
 # =========================================================
-# VECTORSTORE
+# CREATE VECTORSTORE
 # =========================================================
 @st.cache_resource
 def create_vectorstore(text):
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=100
+        chunk_size=1000,
+        chunk_overlap=200
     )
 
     chunks = splitter.split_text(text)
@@ -229,8 +229,8 @@ def load_model():
         "text2text-generation",
         model="google/flan-t5-large",
         max_new_tokens=256,
-        temperature=0.0,
-        do_sample=False
+        temperature=0.2,
+        do_sample=True
     )
 
     return pipe
@@ -246,7 +246,7 @@ def ask_question(
 ):
 
     retriever = vectorstore.as_retriever(
-        search_kwargs={"k": 8}
+        search_kwargs={"k": 12}
     )
 
     docs = retriever.invoke(question)
@@ -257,19 +257,20 @@ def ask_question(
     ])
 
     prompt = f"""
-You are an advanced AI assistant.
+You are a smart AI assistant for uploaded files.
 
-Your job is to understand user questions even if:
-- grammar is wrong
-- spelling is wrong
-- sentence is incomplete
-- mixed English is used
-- informal language is used
+You must understand:
+- broken English
+- spelling mistakes
+- short questions
+- mixed English
+- informal language
 
-Answer naturally and intelligently using ONLY the uploaded file context.
-
-If the answer is not present in the file, say:
-"I could not find that information in the uploaded file."
+Your job:
+1. Read the context carefully
+2. Understand what the user means
+3. Answer clearly from the uploaded file
+4. If exact answer not found, give the closest meaningful answer from the file
 
 Context:
 {context}
@@ -280,7 +281,10 @@ User Question:
 Helpful Answer:
 """
 
-    result = model(prompt)[0]["generated_text"]
+    result = model(
+        prompt,
+        max_new_tokens=200
+    )[0]["generated_text"]
 
     return result, docs
 
