@@ -34,8 +34,8 @@ st.markdown("""
 <style>
 
 .block-container{
-    padding-top:2rem;
-    max-width:1100px;
+    padding-top:1.5rem;
+    max-width:1000px;
 }
 
 h1{
@@ -43,7 +43,7 @@ h1{
 }
 
 .stTextInput input{
-    border-radius:12px;
+    border-radius:10px;
 }
 
 </style>
@@ -123,9 +123,20 @@ def extract_text(uploaded_file):
 
             df = pd.read_csv(uploaded_file)
 
-            df = df.astype(str)
+            df = df.fillna("")
 
-            text = df.to_string(index=False)
+            rows = []
+
+            for _, row in df.iterrows():
+
+                row_text = " | ".join([
+                    f"{col}: {row[col]}"
+                    for col in df.columns
+                ])
+
+                rows.append(row_text)
+
+            text = "\n".join(rows)
 
         # =================================================
         # XLSX
@@ -134,9 +145,20 @@ def extract_text(uploaded_file):
 
             df = pd.read_excel(uploaded_file)
 
-            df = df.astype(str)
+            df = df.fillna("")
 
-            text = df.to_string(index=False)
+            rows = []
+
+            for _, row in df.iterrows():
+
+                row_text = " | ".join([
+                    f"{col}: {row[col]}"
+                    for col in df.columns
+                ])
+
+                rows.append(row_text)
+
+            text = "\n".join(rows)
 
         # =================================================
         # PPTX
@@ -194,8 +216,8 @@ def extract_text(uploaded_file):
 def create_vectorstore(text):
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=150
+        chunk_size=700,
+        chunk_overlap=100
     )
 
     chunks = splitter.split_text(text)
@@ -231,9 +253,9 @@ def load_model():
 
     pipe = pipeline(
         "text2text-generation",
-        model="google/flan-t5-base",
-        max_new_tokens=120,
-        temperature=0.1,
+        model="google/flan-t5-small",
+        max_new_tokens=100,
+        temperature=0.0,
         do_sample=False
     )
 
@@ -250,7 +272,7 @@ def ask_question(
 ):
 
     retriever = vectorstore.as_retriever(
-        search_kwargs={"k": 4}
+        search_kwargs={"k": 3}
     )
 
     docs = retriever.invoke(question)
@@ -266,19 +288,30 @@ def ask_question(
     prompt = f"""
 You are an intelligent AI assistant.
 
-Understand user questions even if:
-- grammar is wrong
-- spelling is wrong
-- broken English is used
-- short questions are used
+You understand:
+- broken English
+- spelling mistakes
+- short questions
+- informal typing
 
-Answer ONLY from the uploaded file context.
+Answer ONLY from uploaded file content.
+
+If the user asks:
+- what is in the file
+- summarize the file
+- what does this file contain
+
+Then provide a clean summary.
+
+For Excel files:
+- explain the data
+- mention important company names
+- mention important columns/topics
 
 Rules:
-- Give clear and accurate answers
+- Give short accurate answers
 - Do not hallucinate
-- Keep answer short and meaningful
-- If answer is unavailable say:
+- If answer not found say:
 "I could not find that information in the uploaded file."
 
 Context:
@@ -290,7 +323,9 @@ Question:
 Answer:
 """
 
-    result = model(prompt)[0]["generated_text"]
+    result = model(
+        prompt
+    )[0]["generated_text"]
 
     return result, docs
 
@@ -333,7 +368,7 @@ if uploaded_file:
         st.success("✅ File uploaded successfully!")
 
         # =================================================
-        # OPTIONAL PREVIEW
+        # FILE PREVIEW
         # =================================================
         with st.expander("📄 File Preview"):
 
@@ -372,7 +407,7 @@ if uploaded_file:
 
                     st.markdown(f"### Chunk {i+1}")
 
-                    st.write(doc.page_content[:1000])
+                    st.write(doc.page_content[:700])
 
                     st.divider()
 
@@ -382,4 +417,4 @@ if uploaded_file:
 
 else:
 
-    st.info("📂 Upload a PDF, Excel, Word, PPT or Image file.")
+    st.info("📂 Upload a file to begin.")
