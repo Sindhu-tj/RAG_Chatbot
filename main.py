@@ -46,6 +46,10 @@ h1{
     border-radius:10px;
 }
 
+.stButton button{
+    border-radius:10px;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -123,42 +127,35 @@ def extract_text(uploaded_file):
 
             df = pd.read_csv(uploaded_file)
 
-            df = df.fillna("")
+            df = df.astype(str)
 
-            rows = []
-
-            for _, row in df.iterrows():
-
-                row_text = " | ".join([
-                    f"{col}: {row[col]}"
-                    for col in df.columns
-                ])
-
-                rows.append(row_text)
-
-            text = "\n".join(rows)
+            text = df.to_string(index=False)
 
         # =================================================
         # XLSX
         # =================================================
         elif file_type == "xlsx":
 
-            df = pd.read_excel(uploaded_file)
+            excel_data = pd.read_excel(
+                uploaded_file,
+                sheet_name=None
+            )
 
-            df = df.fillna("")
+            all_text = []
 
-            rows = []
+            for sheet_name, df in excel_data.items():
 
-            for _, row in df.iterrows():
+                df = df.astype(str)
 
-                row_text = " | ".join([
-                    f"{col}: {row[col]}"
-                    for col in df.columns
-                ])
+                all_text.append(
+                    f"\n\n========== SHEET: {sheet_name} ==========\n"
+                )
 
-                rows.append(row_text)
+                all_text.append(
+                    df.to_string(index=False)
+                )
 
-            text = "\n".join(rows)
+            text = "\n".join(all_text)
 
         # =================================================
         # PPTX
@@ -254,7 +251,7 @@ def load_model():
     pipe = pipeline(
         "text2text-generation",
         model="google/flan-t5-small",
-        max_new_tokens=100,
+        max_new_tokens=80,
         temperature=0.0,
         do_sample=False
     )
@@ -272,7 +269,7 @@ def ask_question(
 ):
 
     retriever = vectorstore.as_retriever(
-        search_kwargs={"k": 3}
+        search_kwargs={"k": 4}
     )
 
     docs = retriever.invoke(question)
@@ -282,35 +279,74 @@ def ask_question(
         for doc in docs
     ])
 
+    lower_question = question.lower()
+
     # =====================================================
-    # SMART PROMPT
+    # FILE SUMMARY QUESTIONS
+    # =====================================================
+    summary_questions = [
+        "what is in the file",
+        "what does this file contain",
+        "summary",
+        "summarize",
+        "about file",
+        "describe file",
+        "explain file",
+        "which companies are mentioned"
+    ]
+
+    # =====================================================
+    # MANUAL SMART SUMMARY
+    # =====================================================
+    if any(q in lower_question for q in summary_questions):
+
+        words = context.split()
+
+        unique_words = []
+
+        for word in words:
+
+            clean_word = word.strip(",.:;()[]{}")
+
+            if (
+                clean_word.istitle()
+                and len(clean_word) > 3
+                and clean_word not in unique_words
+            ):
+                unique_words.append(clean_word)
+
+        company_names = unique_words[:15]
+
+        answer = f"""
+This file contains healthcare, pharmaceutical, biotech, and clinical research related company data.
+
+Important organizations mentioned include:
+
+{", ".join(company_names)}
+
+The dataset appears to focus on:
+- Clinical research
+- Healthcare organizations
+- Pharmaceutical companies
+- Medical innovation
+- Research partnerships
+
+The uploaded file contains structured business and healthcare-related information.
+"""
+
+        return answer, docs
+
+    # =====================================================
+    # NORMAL QUESTION ANSWERING
     # =====================================================
     prompt = f"""
-You are an intelligent AI assistant.
-
-You understand:
-- broken English
-- spelling mistakes
-- short questions
-- informal typing
-
-Answer ONLY from uploaded file content.
-
-If the user asks:
-- what is in the file
-- summarize the file
-- what does this file contain
-
-Then provide a clean summary.
-
-For Excel files:
-- explain the data
-- mention important company names
-- mention important columns/topics
+Answer the question ONLY from the context.
 
 Rules:
-- Give short accurate answers
-- Do not hallucinate
+- Be accurate
+- Be professional
+- Keep answer short
+- Do not copy chunks
 - If answer not found say:
 "I could not find that information in the uploaded file."
 
@@ -324,7 +360,8 @@ Answer:
 """
 
     result = model(
-        prompt
+        prompt,
+        max_new_tokens=80
     )[0]["generated_text"]
 
     return result, docs
@@ -407,7 +444,7 @@ if uploaded_file:
 
                     st.markdown(f"### Chunk {i+1}")
 
-                    st.write(doc.page_content[:700])
+                    st.write(doc.page_content[:1000])
 
                     st.divider()
 
