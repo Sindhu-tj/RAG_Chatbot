@@ -121,20 +121,74 @@ def extract_text(uploaded_file):
             )
 
         # =================================================
+        # JSON
+        # =================================================
+        elif file_type == "json":
+
+            text = uploaded_file.read().decode(
+                "utf-8",
+                errors="ignore"
+            )
+
+        # =================================================
+        # XML
+        # =================================================
+        elif file_type == "xml":
+
+            text = uploaded_file.read().decode(
+                "utf-8",
+                errors="ignore"
+            )
+
+        # =================================================
+        # MARKDOWN
+        # =================================================
+        elif file_type == "md":
+
+            text = uploaded_file.read().decode(
+                "utf-8",
+                errors="ignore"
+            )
+
+        # =================================================
         # CSV
         # =================================================
         elif file_type == "csv":
 
             df = pd.read_csv(uploaded_file)
 
+            df = df.dropna(how="all")
+
             df = df.astype(str)
 
-            text = df.to_string(index=False)
+            rows = []
+
+            for _, row in df.iterrows():
+
+                row_text = []
+
+                for col in df.columns:
+
+                    value = str(row[col]).strip()
+
+                    if value and value.lower() != "nan":
+
+                        row_text.append(
+                            f"{col}: {value}"
+                        )
+
+                if row_text:
+
+                    rows.append(
+                        " | ".join(row_text)
+                    )
+
+            text = "\n".join(rows)
 
         # =================================================
-        # XLSX
+        # XLSX / XLS
         # =================================================
-        elif file_type == "xlsx":
+        elif file_type in ["xlsx", "xls"]:
 
             excel_data = pd.read_excel(
                 uploaded_file,
@@ -145,15 +199,33 @@ def extract_text(uploaded_file):
 
             for sheet_name, df in excel_data.items():
 
+                df = df.dropna(how="all")
+
                 df = df.astype(str)
 
                 all_text.append(
-                    f"\n\n========== SHEET: {sheet_name} ==========\n"
+                    f"\n\n===== SHEET NAME: {sheet_name} =====\n"
                 )
 
-                all_text.append(
-                    df.to_string(index=False)
-                )
+                for _, row in df.iterrows():
+
+                    row_text = []
+
+                    for col in df.columns:
+
+                        value = str(row[col]).strip()
+
+                        if value and value.lower() != "nan":
+
+                            row_text.append(
+                                f"{col}: {value}"
+                            )
+
+                    if row_text:
+
+                        all_text.append(
+                            " | ".join(row_text)
+                        )
 
             text = "\n".join(all_text)
 
@@ -213,8 +285,8 @@ def extract_text(uploaded_file):
 def create_vectorstore(text):
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=700,
-        chunk_overlap=100
+        chunk_size=800,
+        chunk_overlap=150
     )
 
     chunks = splitter.split_text(text)
@@ -250,7 +322,7 @@ def load_model():
 
     pipe = pipeline(
         "text2text-generation",
-        model="google/flan-t5-small",
+        model="google/flan-t5-base",
         max_new_tokens=80,
         temperature=0.0,
         do_sample=False
@@ -269,7 +341,7 @@ def ask_question(
 ):
 
     retriever = vectorstore.as_retriever(
-        search_kwargs={"k": 4}
+        search_kwargs={"k": 6}
     )
 
     docs = retriever.invoke(question)
@@ -292,61 +364,55 @@ def ask_question(
         "about file",
         "describe file",
         "explain file",
-        "which companies are mentioned"
+        "which companies are mentioned",
+        "company names"
     ]
 
     # =====================================================
-    # MANUAL SMART SUMMARY
+    # SMART SUMMARY
     # =====================================================
     if any(q in lower_question for q in summary_questions):
 
-        words = context.split()
+        lines = context.split("\n")
 
-        unique_words = []
+        important_data = []
 
-        for word in words:
+        for line in lines:
 
-            clean_word = word.strip(",.:;()[]{}")
+            if ":" in line:
 
-            if (
-                clean_word.istitle()
-                and len(clean_word) > 3
-                and clean_word not in unique_words
-            ):
-                unique_words.append(clean_word)
-
-        company_names = unique_words[:15]
+                important_data.append(line)
 
         answer = f"""
-This file contains healthcare, pharmaceutical, biotech, and clinical research related company data.
+This uploaded file contains structured information.
 
-Important organizations mentioned include:
+Important extracted information includes:
 
-{", ".join(company_names)}
+{chr(10).join(important_data[:15])}
 
-The dataset appears to focus on:
-- Clinical research
-- Healthcare organizations
-- Pharmaceutical companies
-- Medical innovation
-- Research partnerships
-
-The uploaded file contains structured business and healthcare-related information.
+The file appears to contain business, healthcare, research, or structured dataset information.
 """
 
         return answer, docs
 
     # =====================================================
-    # NORMAL QUESTION ANSWERING
+    # NORMAL QA
     # =====================================================
     prompt = f"""
-Answer the question ONLY from the context.
+You are an intelligent AI assistant.
+
+Understand:
+- broken English
+- spelling mistakes
+- short questions
+- mixed English
+
+Answer ONLY from the provided context.
 
 Rules:
-- Be accurate
-- Be professional
-- Keep answer short
-- Do not copy chunks
+- Give accurate answers
+- Keep answer short and meaningful
+- Do not hallucinate
 - If answer not found say:
 "I could not find that information in the uploaded file."
 
@@ -360,8 +426,7 @@ Answer:
 """
 
     result = model(
-        prompt,
-        max_new_tokens=80
+        prompt
     )[0]["generated_text"]
 
     return result, docs
@@ -378,7 +443,11 @@ uploaded_file = st.file_uploader(
         "txt",
         "csv",
         "xlsx",
+        "xls",
         "pptx",
+        "json",
+        "xml",
+        "md",
         "png",
         "jpg",
         "jpeg"
