@@ -1,11 +1,13 @@
 import streamlit as st
 import tempfile
 import os
+import json
 import pandas as pd
 
 from PIL import Image
 from docx import Document
 from pptx import Presentation
+import easyocr
 
 from langchain.schema import Document as LangDocument
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -27,14 +29,26 @@ st.set_page_config(
 )
 
 # =========================================================
-# CSS
+# SESSION STATE
+# =========================================================
+if "last_file" not in st.session_state:
+    st.session_state.last_file = None
+
+if "answer" not in st.session_state:
+    st.session_state.answer = ""
+
+if "docs" not in st.session_state:
+    st.session_state.docs = []
+
+# =========================================================
+# CUSTOM CSS
 # =========================================================
 st.markdown("""
 <style>
 
 .block-container{
     padding-top:1.5rem;
-    max-width:1000px;
+    max-width:1100px;
 }
 
 h1{
@@ -42,7 +56,11 @@ h1{
 }
 
 .stTextInput input{
-    border-radius:10px;
+    border-radius:12px;
+}
+
+.stButton button{
+    border-radius:12px;
 }
 
 </style>
@@ -53,9 +71,22 @@ h1{
 # =========================================================
 st.title("🤖 Universal AI File Chatbot")
 
-st.write(
-    "Upload PDF, DOCX, TXT, CSV, XLSX, PPTX and ask questions using AI-powered RAG."
-)
+st.write("""
+Upload PDF, DOCX, TXT, CSV, XLSX, PPTX, JSON, XML, Markdown or Images.
+
+Ask questions using AI-powered RAG.
+""")
+
+# =========================================================
+# OCR READER
+# =========================================================
+@st.cache_resource
+def load_ocr():
+
+    return easyocr.Reader(
+        ['en'],
+        gpu=False
+    )
 
 # =========================================================
 # EXTRACT TEXT
@@ -109,8 +140,36 @@ def extract_text(uploaded_file):
                 errors="ignore"
             )
 
+        # JSON
+        elif file_type == "json":
+
+            data = json.load(uploaded_file)
+
+            text = json.dumps(
+                data,
+                indent=2
+            )
+
+        # XML
+        elif file_type == "xml":
+
+            text = uploaded_file.read().decode(
+                "utf-8",
+                errors="ignore"
+            )
+
+        # MARKDOWN
+        elif file_type == "md":
+
+            text = uploaded_file.read().decode(
+                "utf-8",
+                errors="ignore"
+            )
+
         # CSV
         elif file_type == "csv":
+
+            uploaded_file.seek(0)
 
             df = pd.read_csv(uploaded_file)
 
@@ -118,13 +177,14 @@ def extract_text(uploaded_file):
 
             text = df.to_string(index=False)
 
-        # XLSX
-        elif file_type == "xlsx":
+        # XLSX / XLS
+        elif file_type in ["xlsx", "xls"]:
+
+            uploaded_file.seek(0)
 
             excel_data = pd.read_excel(
                 uploaded_file,
-                sheet_name=None,
-                engine="openpyxl"
+                sheet_name=None
             )
 
             all_text = []
@@ -134,7 +194,7 @@ def extract_text(uploaded_file):
                 df = df.fillna("")
 
                 all_text.append(
-                    f"\n\n===== SHEET: {sheet_name} =====\n"
+                    f"\n===== SHEET: {sheet_name} =====\n"
                 )
 
                 all_text.append(
@@ -150,7 +210,11 @@ def extract_text(uploaded_file):
 
             slide_text = []
 
-            for slide in prs.slides:
+            for slide_no, slide in enumerate(prs.slides):
+
+                slide_text.append(
+                    f"\n===== SLIDE {slide_no + 1} ====="
+                )
 
                 for shape in slide.shapes:
 
@@ -158,13 +222,25 @@ def extract_text(uploaded_file):
 
                         if shape.text.strip():
 
-                            slide_text.append(shape.text)
+                            slide_text.append(
+                                shape.text
+                            )
 
             text = "\n".join(slide_text)
 
-        else:
+        # IMAGE OCR
+        elif file_type in ["png", "jpg", "jpeg"]:
 
-            st.error("Unsupported file type")
+            image = Image.open(uploaded_file)
+
+            reader = load_ocr()
+
+            results = reader.readtext(image)
+
+            text = "\n".join([
+                result[1]
+                for result in results
+            ])
 
         return text.strip()
 
@@ -174,7 +250,6 @@ def extract_text(uploaded_file):
 
         return ""
 
-
 # =========================================================
 # VECTORSTORE
 # =========================================================
@@ -182,8 +257,8 @@ def extract_text(uploaded_file):
 def create_vectorstore(text):
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=100
+        chunk_size=1000,
+        chunk_overlap=150
     )
 
     chunks = splitter.split_text(text)
@@ -210,7 +285,6 @@ def create_vectorstore(text):
 
     return vectorstore
 
-
 # =========================================================
 # MODEL
 # =========================================================
@@ -220,18 +294,21 @@ def load_model():
     pipe = pipeline(
         "text2text-generation",
         model="google/flan-t5-small",
-        max_new_tokens=80,
+        max_new_tokens=100,
         temperature=0.0,
         do_sample=False
     )
 
     return pipe
 
-
 # =========================================================
-# QUESTION ANSWERING
+# ASK QUESTION
 # =========================================================
-def ask_question(vectorstore, question, model):
+def ask_question(
+    vectorstore,
+    question,
+    model
+):
 
     retriever = vectorstore.as_retriever(
         search_kwargs={"k": 4}
@@ -244,21 +321,62 @@ def ask_question(vectorstore, question, model):
         for doc in docs
     ])
 
-    # SMART SUMMARY
-    if question.lower() in [
+    lower_question = question.lower()
+
+    summary_questions = [
         "what is in the file",
-        "summarize file",
         "summary",
-        "about file"
-    ]:
+        "summarize",
+        "describe file",
+        "about file",
+        "company names",
+        "which companies",
+        "list company"
+    ]
 
-        return (
-            context[:1000],
-            docs
-        )
+    # =====================================================
+    # SUMMARY MODE
+    # =====================================================
+    if any(q in lower_question for q in summary_questions):
 
+        lines = context.split("\n")
+
+        clean_lines = []
+
+        for line in lines:
+
+            line = line.strip()
+
+            if len(line) > 3:
+
+                clean_lines.append(line)
+
+        unique_lines = []
+
+        for item in clean_lines:
+
+            if item not in unique_lines:
+
+                unique_lines.append(item)
+
+        formatted = "\n".join([
+            f"• {line}"
+            for line in unique_lines[:20]
+        ])
+
+        answer = f"""
+This file contains:
+
+{formatted}
+"""
+
+        return answer, docs
+
+    # =====================================================
+    # NORMAL QA
+    # =====================================================
     prompt = f"""
-Answer ONLY from the context.
+Answer the question ONLY from the context.
 
 Rules:
 - Give short accurate answers
@@ -275,10 +393,11 @@ Question:
 Answer:
 """
 
-    result = model(prompt)[0]["generated_text"]
+    result = model(
+        prompt
+    )[0]["generated_text"]
 
     return result, docs
-
 
 # =========================================================
 # FILE UPLOADER
@@ -291,14 +410,28 @@ uploaded_file = st.file_uploader(
         "txt",
         "csv",
         "xlsx",
-        "pptx"
+        "xls",
+        "pptx",
+        "json",
+        "xml",
+        "md",
+        "png",
+        "jpg",
+        "jpeg"
     ]
 )
 
 # =========================================================
-# MAIN
+# MAIN APP
 # =========================================================
 if uploaded_file:
+
+    # RESET OLD RESULTS
+    if st.session_state.last_file != uploaded_file.name:
+
+        st.session_state.answer = ""
+        st.session_state.docs = []
+        st.session_state.last_file = uploaded_file.name
 
     with st.spinner("📚 Reading file..."):
 
@@ -314,12 +447,64 @@ if uploaded_file:
 
         st.success("✅ File uploaded successfully!")
 
-        # Preview
+        file_type = uploaded_file.name.split(".")[-1].lower()
+
+        # =================================================
+        # FILE PREVIEW
+        # =================================================
         with st.expander("📄 File Preview"):
 
-            st.write(text[:3000])
+            if file_type == "csv":
 
-        # Question
+                uploaded_file.seek(0)
+
+                df = pd.read_csv(uploaded_file)
+
+                st.dataframe(df)
+
+            elif file_type in ["xlsx", "xls"]:
+
+                uploaded_file.seek(0)
+
+                excel_data = pd.read_excel(
+                    uploaded_file,
+                    sheet_name=None
+                )
+
+                for sheet_name, df in excel_data.items():
+
+                    st.subheader(
+                        f"📑 Sheet: {sheet_name}"
+                    )
+
+                    st.dataframe(df)
+
+            elif file_type in ["png", "jpg", "jpeg"]:
+
+                uploaded_file.seek(0)
+
+                image = Image.open(uploaded_file)
+
+                st.image(
+                    image,
+                    use_container_width=True
+                )
+
+                st.write(text[:3000])
+
+            elif file_type == "json":
+
+                uploaded_file.seek(0)
+
+                data = json.load(uploaded_file)
+
+                st.json(data)
+
+            else:
+
+                st.write(text[:3000])
+
+        # QUESTION
         question = st.text_input(
             "💬 Ask a question"
         )
@@ -334,18 +519,26 @@ if uploaded_file:
                     model
                 )
 
+                st.session_state.answer = answer
+                st.session_state.docs = docs
+
+        # SHOW ANSWER
+        if st.session_state.answer:
+
             st.subheader("🤖 Answer")
 
-            st.write(answer)
+            st.write(st.session_state.answer)
 
-            # Sources
+            # SOURCE CHUNKS
             with st.expander("📌 Source Chunks Used"):
 
-                for i, doc in enumerate(docs):
+                for i, doc in enumerate(st.session_state.docs):
 
                     st.markdown(f"### Chunk {i+1}")
 
-                    st.write(doc.page_content[:700])
+                    st.write(
+                        doc.page_content[:1000]
+                    )
 
                     st.divider()
 
