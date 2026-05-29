@@ -29,7 +29,30 @@ st.set_page_config(
 )
 
 # =========================================================
-# CLEAR OLD RESULTS WHEN NEW FILE UPLOADED
+# CUSTOM CSS
+# =========================================================
+st.markdown("""
+<style>
+
+.main {
+    background-color: #0E1117;
+}
+
+.stDataFrame {
+    border-radius: 12px;
+}
+
+.stButton > button {
+    border-radius: 10px;
+    width: 220px;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
+# =========================================================
+# SESSION STATE
 # =========================================================
 if "last_file" not in st.session_state:
     st.session_state.last_file = None
@@ -40,58 +63,35 @@ if "answer" not in st.session_state:
 if "docs" not in st.session_state:
     st.session_state.docs = []
 
-# =========================================================
-# CUSTOM CSS
-# =========================================================
-st.markdown("""
-<style>
+if "df" not in st.session_state:
+    st.session_state.df = None
 
-.block-container{
-    padding-top:1.5rem;
-    max-width:1100px;
-}
-
-h1{
-    text-align:center;
-}
-
-.stTextInput input{
-    border-radius:12px;
-}
-
-.stButton button{
-    border-radius:12px;
-}
-
-</style>
-""", unsafe_allow_html=True)
 
 # =========================================================
-# TITLE
-# =========================================================
-st.title("🤖 Universal AI File Chatbot")
-
-st.write(
-    """
-Upload PDF, DOCX, TXT, CSV, XLSX, PPTX, JSON, XML, Markdown or Images.
-
-Ask questions using AI-powered RAG.
-"""
-)
-
-# =========================================================
-# OCR READER
+# OCR
 # =========================================================
 @st.cache_resource
 def load_ocr():
+    return easyocr.Reader(['en'], gpu=False)
 
-    return easyocr.Reader(
-        ['en'],
-        gpu=False
-    )
 
 # =========================================================
-# EXTRACT TEXT
+# MODEL
+# =========================================================
+@st.cache_resource
+def load_model():
+
+    return pipeline(
+        "text2text-generation",
+        model="google/flan-t5-large",
+        max_new_tokens=256,
+        do_sample=False,
+        temperature=0
+    )
+
+
+# =========================================================
+# TEXT EXTRACTION
 # =========================================================
 def extract_text(uploaded_file):
 
@@ -101,46 +101,44 @@ def extract_text(uploaded_file):
 
     try:
 
-        # =================================================
+        # =====================================================
         # PDF
-        # =================================================
+        # =====================================================
         if file_type == "pdf":
 
-            with tempfile.NamedTemporaryFile(
-                delete=False,
-                suffix=".pdf"
-            ) as tmp:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
 
                 tmp.write(uploaded_file.read())
-                tmp_path = tmp.name
+                path = tmp.name
 
-            loader = PyPDFLoader(tmp_path)
+            loader = PyPDFLoader(path)
 
             docs = loader.load()
 
-            text = "\n".join([
-                doc.page_content
-                for doc in docs
-            ])
+            text = "\n".join(
+                [d.page_content for d in docs]
+            )
 
-            os.unlink(tmp_path)
+            os.unlink(path)
 
-        # =================================================
+        # =====================================================
         # DOCX
-        # =================================================
+        # =====================================================
         elif file_type == "docx":
 
             doc = Document(uploaded_file)
 
-            text = "\n".join([
-                para.text
-                for para in doc.paragraphs
-                if para.text.strip()
-            ])
+            text = "\n".join(
+                [
+                    p.text
+                    for p in doc.paragraphs
+                    if p.text.strip()
+                ]
+            )
 
-        # =================================================
+        # =====================================================
         # TXT
-        # =================================================
+        # =====================================================
         elif file_type == "txt":
 
             text = uploaded_file.read().decode(
@@ -148,125 +146,50 @@ def extract_text(uploaded_file):
                 errors="ignore"
             )
 
-        # =================================================
-        # JSON
-        # =================================================
-        elif file_type == "json":
-
-            data = json.load(uploaded_file)
-
-            text = json.dumps(
-                data,
-                indent=2
-            )
-
-        # =================================================
-        # XML
-        # =================================================
-        elif file_type == "xml":
+        # =====================================================
+        # JSON / XML / MD
+        # =====================================================
+        elif file_type in ["json", "xml", "md"]:
 
             text = uploaded_file.read().decode(
                 "utf-8",
                 errors="ignore"
             )
 
-        # =================================================
-        # MARKDOWN
-        # =================================================
-        elif file_type == "md":
-
-            text = uploaded_file.read().decode(
-                "utf-8",
-                errors="ignore"
-            )
-
-        # =================================================
+        # =====================================================
         # CSV
-        # =================================================
+        # =====================================================
         elif file_type == "csv":
 
-            uploaded_file.seek(0)
+            df = pd.read_csv(uploaded_file).fillna("")
 
-            df = pd.read_csv(uploaded_file)
+            st.session_state.df = df
 
-            df = df.fillna("")
+            text = df.to_string(index=False)
 
-            rows = []
-
-            for _, row in df.iterrows():
-
-                row_text = []
-
-                for col in df.columns:
-
-                    value = str(row[col]).strip()
-
-                    if value:
-
-                        row_text.append(
-                            f"{col}: {value}"
-                        )
-
-                rows.append(" | ".join(row_text))
-
-            text = "\n".join(rows)
-
-        # =================================================
-        # XLSX / XLS
-        # =================================================
+        # =====================================================
+        # EXCEL
+        # =====================================================
         elif file_type in ["xlsx", "xls"]:
 
-            uploaded_file.seek(0)
+            df = pd.read_excel(uploaded_file).fillna("")
 
-            excel_data = pd.read_excel(
-                uploaded_file,
-                sheet_name=None
-            )
+            st.session_state.df = df
 
-            all_text = []
+            text = df.to_string(index=False)
 
-            for sheet_name, df in excel_data.items():
-
-                df = df.fillna("")
-
-                all_text.append(
-                    f"\n===== SHEET: {sheet_name} =====\n"
-                )
-
-                for _, row in df.iterrows():
-
-                    row_text = []
-
-                    for col in df.columns:
-
-                        value = str(row[col]).strip()
-
-                        if value:
-
-                            row_text.append(
-                                f"{col}: {value}"
-                            )
-
-                    all_text.append(
-                        " | ".join(row_text)
-                    )
-
-            text = "\n".join(all_text)
-
-        # =================================================
+        # =====================================================
         # PPTX
-        # =================================================
+        # =====================================================
         elif file_type == "pptx":
 
             prs = Presentation(uploaded_file)
 
-            slide_text = []
+            slides = []
 
-            for slide_no, slide in enumerate(prs.slides):
+            for i, slide in enumerate(prs.slides):
 
-                slide_text.append(
-                    f"\n===== SLIDE {slide_no + 1} ====="
-                )
+                slides.append(f"\nSLIDE {i+1}")
 
                 for shape in slide.shapes:
 
@@ -274,15 +197,13 @@ def extract_text(uploaded_file):
 
                         if shape.text.strip():
 
-                            slide_text.append(
-                                shape.text
-                            )
+                            slides.append(shape.text)
 
-            text = "\n".join(slide_text)
+            text = "\n".join(slides)
 
-        # =================================================
+        # =====================================================
         # IMAGE OCR
-        # =================================================
+        # =====================================================
         elif file_type in ["png", "jpg", "jpeg"]:
 
             image = Image.open(uploaded_file)
@@ -291,45 +212,49 @@ def extract_text(uploaded_file):
 
             results = reader.readtext(image)
 
-            text = "\n".join([
-                result[1]
-                for result in results
-            ])
+            text = "\n".join(
+                [r[1] for r in results]
+            )
+
+            text = " ".join(text.split())
 
         return text.strip()
 
     except Exception as e:
 
-        st.error(f"❌ Error reading file: {e}")
+        st.error(f"Error while reading file: {e}")
 
         return ""
 
+
 # =========================================================
-# VECTORSTORE
+# VECTOR DATABASE
 # =========================================================
 @st.cache_resource
 def create_vectorstore(text):
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=150
+        chunk_size=1500,
+        chunk_overlap=300
     )
 
     chunks = splitter.split_text(text)
 
-    chunks = [
-        chunk.strip()
-        for chunk in chunks
-        if chunk.strip()
-    ]
+    docs = []
 
-    docs = [
-        LangDocument(page_content=chunk)
-        for chunk in chunks
-    ]
+    for i, c in enumerate(chunks):
+
+        docs.append(
+            LangDocument(
+                page_content=c,
+                metadata={
+                    "chunk_id": i
+                }
+            )
+        )
 
     embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2"
+        model_name="BAAI/bge-large-en-v1.5"
     )
 
     vectorstore = FAISS.from_documents(
@@ -339,128 +264,195 @@ def create_vectorstore(text):
 
     return vectorstore
 
-# =========================================================
-# MODEL
-# =========================================================
-@st.cache_resource
-def load_model():
-
-    pipe = pipeline(
-        "text2text-generation",
-        model="google/flan-t5-small",
-        max_new_tokens=100,
-        temperature=0.0,
-        do_sample=False
-    )
-
-    return pipe
 
 # =========================================================
-# ASK QUESTION
+# SMART ANSWER ENGINE
 # =========================================================
-def ask_question(
-    vectorstore,
+def smart_answer(
+    file_type,
     question,
+    text,
+    vectorstore,
     model
 ):
 
-    retriever = vectorstore.as_retriever(
-        search_kwargs={"k": 4}
-    )
-
-    docs = retriever.invoke(question)
-
-    context = "\n\n".join([
-        doc.page_content
-        for doc in docs
-    ])
-
-    lower_question = question.lower()
+    q = question.lower()
 
     # =====================================================
-    # SUMMARY QUESTIONS
+    # CSV / EXCEL
     # =====================================================
-    summary_questions = [
-        "what is in the file",
-        "summary",
-        "summarize",
-        "describe file",
-        "about file",
-        "company names",
-        "which companies",
-        "list company"
-    ]
+    if file_type in ["csv", "xlsx", "xls"]:
+
+        df = st.session_state.df
+
+        # SUMMARY
+        if any(word in q for word in [
+            "summary",
+            "overview",
+            "describe",
+            "what",
+            "file"
+        ]):
+
+            return {
+                "type": "table_summary",
+                "rows": df.shape[0],
+                "cols": df.shape[1],
+                "columns": list(df.columns),
+                "preview": df.head(20)
+            }
+
+        # COLUMNS
+        elif "column" in q:
+
+            return {
+                "type": "text",
+                "content":
+                f"Columns are:\n\n{', '.join(df.columns)}"
+            }
+
+        # ROW COUNT
+        elif "rows" in q or "entries" in q:
+
+            return {
+                "type": "text",
+                "content":
+                f"The file contains {df.shape[0]} rows."
+            }
+
+        # SEARCH DATA
+        else:
+
+            matched = pd.DataFrame()
+
+            for col in df.columns:
+
+                temp = df[
+                    df[col]
+                    .astype(str)
+                    .str.lower()
+                    .str.contains(q, na=False)
+                ]
+
+                matched = pd.concat([matched, temp])
+
+            matched = matched.drop_duplicates()
+
+            if len(matched) > 0:
+
+                return {
+                    "type": "table",
+                    "data": matched.head(50)
+                }
+
+            return {
+                "type": "text",
+                "content":
+                "No matching data found."
+            }
 
     # =====================================================
-    # SMART SUMMARY
+    # JSON
     # =====================================================
-    if any(q in lower_question for q in summary_questions):
+    elif file_type == "json":
 
-        lines = context.split("\n")
+        try:
 
-        clean_lines = []
+            data = json.loads(text)
 
-        for line in lines:
+            return {
+                "type": "text",
+                "content":
+                f"JSON contains keys:\n\n{list(data.keys())[:20]}"
+            }
 
-            line = line.strip()
+        except:
 
-            if len(line) > 3:
+            return {
+                "type": "text",
+                "content":
+                "Invalid JSON structure."
+            }
 
-                clean_lines.append(line)
+    # =====================================================
+    # IMAGE OCR
+    # =====================================================
+    elif file_type in ["png", "jpg", "jpeg"]:
 
-        unique_lines = []
+        return {
+            "type": "text",
+            "content":
+            f"Extracted text from image:\n\n{text[:3000]}"
+        }
 
-        for item in clean_lines:
+    # =====================================================
+    # PPTX SUMMARY
+    # =====================================================
+    elif file_type == "pptx":
 
-            if item not in unique_lines:
+        prompt = f"""
+Summarize this PowerPoint presentation clearly.
 
-                unique_lines.append(item)
-
-        formatted = "\n".join([
-            f"• {line}"
-            for line in unique_lines[:20]
-        ])
-
-        answer = f"""
-This file contains:
-
-{formatted}
+TEXT:
+{text[:4000]}
 """
 
-        return answer, docs
+        result = model(prompt)[0]["generated_text"]
+
+        return {
+            "type": "text",
+            "content": result
+        }
 
     # =====================================================
-    # NORMAL QA
+    # GENERAL RAG MODE
     # =====================================================
-    prompt = f"""
-Answer the question ONLY from the context.
+    else:
 
-Rules:
-- Give short accurate answers
-- Do not hallucinate
-- If answer not found say:
-"I could not find that information in the uploaded file."
+        docs = vectorstore.similarity_search(
+            question,
+            k=4
+        )
 
-Context:
+        context = "\n".join(
+            [d.page_content for d in docs]
+        )
+
+        prompt = f"""
+You are a highly accurate document assistant.
+
+RULES:
+- Answer ONLY from provided context
+- If answer is missing say:
+  'Information not found in document'
+- Never hallucinate
+- Be concise and factual
+
+CONTEXT:
 {context}
 
-Question:
+QUESTION:
 {question}
 
-Answer:
+ANSWER:
 """
 
-    result = model(
-        prompt
-    )[0]["generated_text"]
+        result = model(prompt)[0]["generated_text"]
 
-    return result, docs
+        return {
+            "type": "rag",
+            "content": result,
+            "docs": docs
+        }
+
 
 # =========================================================
-# FILE UPLOADER
+# MAIN UI
 # =========================================================
+st.title("🤖 Universal AI File Chatbot")
+
 uploaded_file = st.file_uploader(
-    "📤 Upload File",
+    "Upload File",
     type=[
         "pdf",
         "docx",
@@ -479,143 +471,175 @@ uploaded_file = st.file_uploader(
 )
 
 # =========================================================
-# MAIN APP
+# FILE LOADED
 # =========================================================
 if uploaded_file:
 
-    # =====================================================
-    # RESET OLD RESULTS
-    # =====================================================
+    file_type = uploaded_file.name.split(".")[-1].lower()
+
+    # RESET
     if st.session_state.last_file != uploaded_file.name:
 
         st.session_state.answer = ""
         st.session_state.docs = []
+        st.session_state.df = None
+
         st.session_state.last_file = uploaded_file.name
 
-    with st.spinner("📚 Reading file..."):
+    # READ FILE
+    with st.spinner("Reading file..."):
 
         text = extract_text(uploaded_file)
 
     if text:
 
-        with st.spinner("🧠 Building AI knowledge base..."):
+        # CREATE VECTORSTORE
+        with st.spinner("Creating AI index..."):
 
             vectorstore = create_vectorstore(text)
 
             model = load_model()
 
-        st.success("✅ File uploaded successfully!")
+        # =====================================================
+        # SIDEBAR
+        # =====================================================
+        with st.sidebar:
 
-        file_type = uploaded_file.name.split(".")[-1].lower()
+            st.markdown("## 📁 Uploaded File")
 
-        # =================================================
-        # FILE PREVIEW
-        # =================================================
-        with st.expander("📄 File Preview"):
+            st.success("File uploaded successfully!")
 
-            # CSV
-            if file_type == "csv":
+            st.markdown("## 📄 File Information")
 
-                uploaded_file.seek(0)
+            st.write(f"**File Name:** {uploaded_file.name}")
 
-                df = pd.read_csv(uploaded_file)
+            st.write(f"**File Type:** {file_type.upper()}")
 
-                st.dataframe(df)
+            if st.session_state.df is not None:
 
-            # XLSX
-            elif file_type in ["xlsx", "xls"]:
+                df = st.session_state.df
 
-                uploaded_file.seek(0)
+                st.write(f"**Rows:** {df.shape[0]}")
 
-                excel_data = pd.read_excel(
-                    uploaded_file,
-                    sheet_name=None
+                st.write(f"**Columns:** {df.shape[1]}")
+
+                st.write(
+                    f"**Column Names:** "
+                    f"{', '.join(df.columns)}"
                 )
 
-                for sheet_name, df in excel_data.items():
+        # =====================================================
+        # PREVIEW
+        # =====================================================
+        st.subheader("📄 File Preview")
 
-                    st.subheader(
-                        f"📑 Sheet: {sheet_name}"
-                    )
+        if file_type in ["csv", "xlsx", "xls"]:
 
-                    st.dataframe(df)
+            st.dataframe(
+                st.session_state.df.head(20),
+                use_container_width=True,
+                height=500
+            )
 
-            # IMAGE
-            elif file_type in ["png", "jpg", "jpeg"]:
+        else:
 
-                uploaded_file.seek(0)
+            st.text(text[:3000])
 
-                image = Image.open(uploaded_file)
-
-                st.image(
-                    image,
-                    use_container_width=True
-                )
-
-                st.write(text[:3000])
-
-            # JSON
-            elif file_type == "json":
-
-                uploaded_file.seek(0)
-
-                data = json.load(uploaded_file)
-
-                st.json(data)
-
-            # OTHER FILES
-            else:
-
-                st.write(text[:3000])
-
-        # =================================================
-        # QUESTION INPUT
-        # =================================================
+        # =====================================================
+        # QUESTION
+        # =====================================================
         question = st.text_input(
-            "💬 Ask a question"
+            "Ask a question"
         )
 
+        # =====================================================
+        # AI ANSWER
+        # =====================================================
         if question:
 
-            with st.spinner("🔍 Finding answer..."):
+            with st.spinner("Thinking..."):
 
-                answer, docs = ask_question(
-                    vectorstore,
+                response = smart_answer(
+                    file_type,
                     question,
+                    text,
+                    vectorstore,
                     model
                 )
 
-                st.session_state.answer = answer
-                st.session_state.docs = docs
+            st.subheader("🤖 AI Answer")
 
-        # =================================================
-        # SHOW ANSWER
-        # =================================================
-        if st.session_state.answer:
+            # =================================================
+            # TABLE SUMMARY
+            # =================================================
+            if response["type"] == "table_summary":
 
-            st.subheader("🤖 Answer")
+                st.success(
+                    "File analyzed successfully."
+                )
 
-            st.write(st.session_state.answer)
+                st.markdown(f"""
+- **Rows:** {response['rows']}
+- **Columns:** {response['cols']}
+- **Column Names:** {', '.join(response['columns'])}
+""")
 
-            # =============================================
-            # SOURCE CHUNKS
-            # =============================================
-            with st.expander("📌 Source Chunks Used"):
+                st.dataframe(
+                    response["preview"],
+                    use_container_width=True,
+                    height=500
+                )
 
-                for i, doc in enumerate(st.session_state.docs):
+            # =================================================
+            # TABLE
+            # =================================================
+            elif response["type"] == "table":
 
-                    st.markdown(f"### Chunk {i+1}")
+                st.dataframe(
+                    response["data"],
+                    use_container_width=True,
+                    height=500
+                )
+
+            # =================================================
+            # TEXT
+            # =================================================
+            elif response["type"] == "text":
+
+                st.write(response["content"])
+
+            # =================================================
+            # RAG
+            # =================================================
+            elif response["type"] == "rag":
+
+                st.write(response["content"])
+
+                with st.expander("📌 Source Details"):
 
                     st.write(
-                        doc.page_content[:1000]
+                        f"{len(response['docs'])} "
+                        f"relevant chunks retrieved."
                     )
 
-                    st.divider()
+                    for i, d in enumerate(response["docs"]):
+
+                        st.markdown(
+                            f"### Chunk {i+1}"
+                        )
+
+                        st.write(
+                            d.page_content[:800]
+                        )
 
     else:
 
-        st.error("❌ No readable content found.")
+        st.error("No content found.")
 
+# =========================================================
+# NO FILE
+# =========================================================
 else:
 
-    st.info("📂 Upload a file to begin.")
+    st.info("Upload a file to start.")
+
