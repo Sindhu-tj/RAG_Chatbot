@@ -29,6 +29,18 @@ st.set_page_config(
 )
 
 # =========================================================
+# CLEAR OLD RESULTS WHEN NEW FILE UPLOADED
+# =========================================================
+if "last_file" not in st.session_state:
+    st.session_state.last_file = None
+
+if "answer" not in st.session_state:
+    st.session_state.answer = ""
+
+if "docs" not in st.session_state:
+    st.session_state.docs = []
+
+# =========================================================
 # CUSTOM CSS
 # =========================================================
 st.markdown("""
@@ -60,7 +72,11 @@ h1{
 st.title("🤖 Universal AI File Chatbot")
 
 st.write(
-    "Upload PDF, DOCX, TXT, CSV, XLSX, PPTX, JSON, XML, MD or Images and ask questions using AI-powered RAG."
+    """
+Upload PDF, DOCX, TXT, CSV, XLSX, PPTX, JSON, XML, Markdown or Images.
+
+Ask questions using AI-powered RAG.
+"""
 )
 
 # =========================================================
@@ -73,7 +89,6 @@ def load_ocr():
         ['en'],
         gpu=False
     )
-
 
 # =========================================================
 # EXTRACT TEXT
@@ -170,16 +185,38 @@ def extract_text(uploaded_file):
         # =================================================
         elif file_type == "csv":
 
+            uploaded_file.seek(0)
+
             df = pd.read_csv(uploaded_file)
 
             df = df.fillna("")
 
-            text = df.to_string(index=False)
+            rows = []
+
+            for _, row in df.iterrows():
+
+                row_text = []
+
+                for col in df.columns:
+
+                    value = str(row[col]).strip()
+
+                    if value:
+
+                        row_text.append(
+                            f"{col}: {value}"
+                        )
+
+                rows.append(" | ".join(row_text))
+
+            text = "\n".join(rows)
 
         # =================================================
         # XLSX / XLS
         # =================================================
         elif file_type in ["xlsx", "xls"]:
+
+            uploaded_file.seek(0)
 
             excel_data = pd.read_excel(
                 uploaded_file,
@@ -196,9 +233,23 @@ def extract_text(uploaded_file):
                     f"\n===== SHEET: {sheet_name} =====\n"
                 )
 
-                all_text.append(
-                    df.to_string(index=False)
-                )
+                for _, row in df.iterrows():
+
+                    row_text = []
+
+                    for col in df.columns:
+
+                        value = str(row[col]).strip()
+
+                        if value:
+
+                            row_text.append(
+                                f"{col}: {value}"
+                            )
+
+                    all_text.append(
+                        " | ".join(row_text)
+                    )
 
             text = "\n".join(all_text)
 
@@ -253,7 +304,6 @@ def extract_text(uploaded_file):
 
         return ""
 
-
 # =========================================================
 # VECTORSTORE
 # =========================================================
@@ -289,7 +339,6 @@ def create_vectorstore(text):
 
     return vectorstore
 
-
 # =========================================================
 # MODEL
 # =========================================================
@@ -305,7 +354,6 @@ def load_model():
     )
 
     return pipe
-
 
 # =========================================================
 # ASK QUESTION
@@ -339,7 +387,8 @@ def ask_question(
         "describe file",
         "about file",
         "company names",
-        "which companies"
+        "which companies",
+        "list company"
     ]
 
     # =====================================================
@@ -368,12 +417,12 @@ def ask_question(
                 unique_lines.append(item)
 
         formatted = "\n".join([
-            f"{i+1}. {line}"
-            for i, line in enumerate(unique_lines[:15])
+            f"• {line}"
+            for line in unique_lines[:20]
         ])
 
         answer = f"""
-This file contains the following important information:
+This file contains:
 
 {formatted}
 """
@@ -407,7 +456,6 @@ Answer:
 
     return result, docs
 
-
 # =========================================================
 # FILE UPLOADER
 # =========================================================
@@ -435,6 +483,15 @@ uploaded_file = st.file_uploader(
 # =========================================================
 if uploaded_file:
 
+    # =====================================================
+    # RESET OLD RESULTS
+    # =====================================================
+    if st.session_state.last_file != uploaded_file.name:
+
+        st.session_state.answer = ""
+        st.session_state.docs = []
+        st.session_state.last_file = uploaded_file.name
+
     with st.spinner("📚 Reading file..."):
 
         text = extract_text(uploaded_file)
@@ -456,20 +513,16 @@ if uploaded_file:
         # =================================================
         with st.expander("📄 File Preview"):
 
-            # ==============================
             # CSV
-            # ==============================
             if file_type == "csv":
 
                 uploaded_file.seek(0)
 
                 df = pd.read_csv(uploaded_file)
 
-                st.dataframe(df.head(20))
+                st.dataframe(df)
 
-            # ==============================
             # XLSX
-            # ==============================
             elif file_type in ["xlsx", "xls"]:
 
                 uploaded_file.seek(0)
@@ -485,11 +538,9 @@ if uploaded_file:
                         f"📑 Sheet: {sheet_name}"
                     )
 
-                    st.dataframe(df.head(20))
+                    st.dataframe(df)
 
-            # ==============================
             # IMAGE
-            # ==============================
             elif file_type in ["png", "jpg", "jpeg"]:
 
                 uploaded_file.seek(0)
@@ -501,11 +552,9 @@ if uploaded_file:
                     use_container_width=True
                 )
 
-                st.write(text[:2000])
+                st.write(text[:3000])
 
-            # ==============================
             # JSON
-            # ==============================
             elif file_type == "json":
 
                 uploaded_file.seek(0)
@@ -514,9 +563,7 @@ if uploaded_file:
 
                 st.json(data)
 
-            # ==============================
             # OTHER FILES
-            # ==============================
             else:
 
                 st.write(text[:3000])
@@ -538,19 +585,24 @@ if uploaded_file:
                     model
                 )
 
-            # =============================================
-            # ANSWER
-            # =============================================
+                st.session_state.answer = answer
+                st.session_state.docs = docs
+
+        # =================================================
+        # SHOW ANSWER
+        # =================================================
+        if st.session_state.answer:
+
             st.subheader("🤖 Answer")
 
-            st.write(answer)
+            st.write(st.session_state.answer)
 
             # =============================================
             # SOURCE CHUNKS
             # =============================================
             with st.expander("📌 Source Chunks Used"):
 
-                for i, doc in enumerate(docs):
+                for i, doc in enumerate(st.session_state.docs):
 
                     st.markdown(f"### Chunk {i+1}")
 
