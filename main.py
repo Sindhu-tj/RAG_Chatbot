@@ -1,6 +1,7 @@
 import streamlit as st
 import tempfile
 import os
+import json
 import pandas as pd
 
 from PIL import Image
@@ -35,7 +36,7 @@ st.markdown("""
 
 .block-container{
     padding-top:1.5rem;
-    max-width:1000px;
+    max-width:1100px;
 }
 
 h1{
@@ -43,11 +44,11 @@ h1{
 }
 
 .stTextInput input{
-    border-radius:10px;
+    border-radius:12px;
 }
 
 .stButton button{
-    border-radius:10px;
+    border-radius:12px;
 }
 
 </style>
@@ -59,8 +60,20 @@ h1{
 st.title("🤖 Universal AI File Chatbot")
 
 st.write(
-    "Upload PDF, DOCX, TXT, CSV, XLSX, PPTX or Images and ask questions using AI-powered RAG."
+    "Upload PDF, DOCX, TXT, CSV, XLSX, PPTX, JSON, XML, MD or Images and ask questions using AI-powered RAG."
 )
+
+# =========================================================
+# OCR READER
+# =========================================================
+@st.cache_resource
+def load_ocr():
+
+    return easyocr.Reader(
+        ['en'],
+        gpu=False
+    )
+
 
 # =========================================================
 # EXTRACT TEXT
@@ -125,9 +138,11 @@ def extract_text(uploaded_file):
         # =================================================
         elif file_type == "json":
 
-            text = uploaded_file.read().decode(
-                "utf-8",
-                errors="ignore"
+            data = json.load(uploaded_file)
+
+            text = json.dumps(
+                data,
+                indent=2
             )
 
         # =================================================
@@ -157,33 +172,9 @@ def extract_text(uploaded_file):
 
             df = pd.read_csv(uploaded_file)
 
-            df = df.dropna(how="all")
+            df = df.fillna("")
 
-            df = df.astype(str)
-
-            rows = []
-
-            for _, row in df.iterrows():
-
-                row_text = []
-
-                for col in df.columns:
-
-                    value = str(row[col]).strip()
-
-                    if value and value.lower() != "nan":
-
-                        row_text.append(
-                            f"{col}: {value}"
-                        )
-
-                if row_text:
-
-                    rows.append(
-                        " | ".join(row_text)
-                    )
-
-            text = "\n".join(rows)
+            text = df.to_string(index=False)
 
         # =================================================
         # XLSX / XLS
@@ -199,33 +190,15 @@ def extract_text(uploaded_file):
 
             for sheet_name, df in excel_data.items():
 
-                df = df.dropna(how="all")
-
-                df = df.astype(str)
+                df = df.fillna("")
 
                 all_text.append(
-                    f"\n\n===== SHEET NAME: {sheet_name} =====\n"
+                    f"\n===== SHEET: {sheet_name} =====\n"
                 )
 
-                for _, row in df.iterrows():
-
-                    row_text = []
-
-                    for col in df.columns:
-
-                        value = str(row[col]).strip()
-
-                        if value and value.lower() != "nan":
-
-                            row_text.append(
-                                f"{col}: {value}"
-                            )
-
-                    if row_text:
-
-                        all_text.append(
-                            " | ".join(row_text)
-                        )
+                all_text.append(
+                    df.to_string(index=False)
+                )
 
             text = "\n".join(all_text)
 
@@ -238,7 +211,11 @@ def extract_text(uploaded_file):
 
             slide_text = []
 
-            for slide in prs.slides:
+            for slide_no, slide in enumerate(prs.slides):
+
+                slide_text.append(
+                    f"\n===== SLIDE {slide_no + 1} ====="
+                )
 
                 for shape in slide.shapes:
 
@@ -246,7 +223,9 @@ def extract_text(uploaded_file):
 
                         if shape.text.strip():
 
-                            slide_text.append(shape.text)
+                            slide_text.append(
+                                shape.text
+                            )
 
             text = "\n".join(slide_text)
 
@@ -257,10 +236,7 @@ def extract_text(uploaded_file):
 
             image = Image.open(uploaded_file)
 
-            reader = easyocr.Reader(
-                ['en'],
-                gpu=False
-            )
+            reader = load_ocr()
 
             results = reader.readtext(image)
 
@@ -279,13 +255,13 @@ def extract_text(uploaded_file):
 
 
 # =========================================================
-# CREATE VECTORSTORE
+# VECTORSTORE
 # =========================================================
 @st.cache_resource
 def create_vectorstore(text):
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
+        chunk_size=1000,
         chunk_overlap=150
     )
 
@@ -315,15 +291,15 @@ def create_vectorstore(text):
 
 
 # =========================================================
-# LOAD MODEL
+# MODEL
 # =========================================================
 @st.cache_resource
 def load_model():
 
     pipe = pipeline(
         "text2text-generation",
-        model="google/flan-t5-base",
-        max_new_tokens=80,
+        model="google/flan-t5-small",
+        max_new_tokens=100,
         temperature=0.0,
         do_sample=False
     )
@@ -341,7 +317,7 @@ def ask_question(
 ):
 
     retriever = vectorstore.as_retriever(
-        search_kwargs={"k": 6}
+        search_kwargs={"k": 4}
     )
 
     docs = retriever.invoke(question)
@@ -354,18 +330,16 @@ def ask_question(
     lower_question = question.lower()
 
     # =====================================================
-    # FILE SUMMARY QUESTIONS
+    # SUMMARY QUESTIONS
     # =====================================================
     summary_questions = [
         "what is in the file",
-        "what does this file contain",
         "summary",
         "summarize",
-        "about file",
         "describe file",
-        "explain file",
-        "which companies are mentioned",
-        "company names"
+        "about file",
+        "company names",
+        "which companies"
     ]
 
     # =====================================================
@@ -375,22 +349,33 @@ def ask_question(
 
         lines = context.split("\n")
 
-        important_data = []
+        clean_lines = []
 
         for line in lines:
 
-            if ":" in line:
+            line = line.strip()
 
-                important_data.append(line)
+            if len(line) > 3:
+
+                clean_lines.append(line)
+
+        unique_lines = []
+
+        for item in clean_lines:
+
+            if item not in unique_lines:
+
+                unique_lines.append(item)
+
+        formatted = "\n".join([
+            f"{i+1}. {line}"
+            for i, line in enumerate(unique_lines[:15])
+        ])
 
         answer = f"""
-This uploaded file contains structured information.
+This file contains the following important information:
 
-Important extracted information includes:
-
-{chr(10).join(important_data[:15])}
-
-The file appears to contain business, healthcare, research, or structured dataset information.
+{formatted}
 """
 
         return answer, docs
@@ -399,19 +384,10 @@ The file appears to contain business, healthcare, research, or structured datase
     # NORMAL QA
     # =====================================================
     prompt = f"""
-You are an intelligent AI assistant.
-
-Understand:
-- broken English
-- spelling mistakes
-- short questions
-- mixed English
-
-Answer ONLY from the provided context.
+Answer the question ONLY from the context.
 
 Rules:
-- Give accurate answers
-- Keep answer short and meaningful
+- Give short accurate answers
 - Do not hallucinate
 - If answer not found say:
 "I could not find that information in the uploaded file."
@@ -473,12 +449,77 @@ if uploaded_file:
 
         st.success("✅ File uploaded successfully!")
 
+        file_type = uploaded_file.name.split(".")[-1].lower()
+
         # =================================================
         # FILE PREVIEW
         # =================================================
         with st.expander("📄 File Preview"):
 
-            st.write(text[:3000])
+            # ==============================
+            # CSV
+            # ==============================
+            if file_type == "csv":
+
+                uploaded_file.seek(0)
+
+                df = pd.read_csv(uploaded_file)
+
+                st.dataframe(df.head(20))
+
+            # ==============================
+            # XLSX
+            # ==============================
+            elif file_type in ["xlsx", "xls"]:
+
+                uploaded_file.seek(0)
+
+                excel_data = pd.read_excel(
+                    uploaded_file,
+                    sheet_name=None
+                )
+
+                for sheet_name, df in excel_data.items():
+
+                    st.subheader(
+                        f"📑 Sheet: {sheet_name}"
+                    )
+
+                    st.dataframe(df.head(20))
+
+            # ==============================
+            # IMAGE
+            # ==============================
+            elif file_type in ["png", "jpg", "jpeg"]:
+
+                uploaded_file.seek(0)
+
+                image = Image.open(uploaded_file)
+
+                st.image(
+                    image,
+                    use_container_width=True
+                )
+
+                st.write(text[:2000])
+
+            # ==============================
+            # JSON
+            # ==============================
+            elif file_type == "json":
+
+                uploaded_file.seek(0)
+
+                data = json.load(uploaded_file)
+
+                st.json(data)
+
+            # ==============================
+            # OTHER FILES
+            # ==============================
+            else:
+
+                st.write(text[:3000])
 
         # =================================================
         # QUESTION INPUT
@@ -513,7 +554,9 @@ if uploaded_file:
 
                     st.markdown(f"### Chunk {i+1}")
 
-                    st.write(doc.page_content[:1000])
+                    st.write(
+                        doc.page_content[:1000]
+                    )
 
                     st.divider()
 
