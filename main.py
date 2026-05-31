@@ -53,8 +53,18 @@ def load_ocr():
 
 @st.cache_resource
 def load_model():
-    return pipeline("text2text-generation", model="google/flan-t5-large",
-                    max_new_tokens=256, do_sample=False, temperature=0)
+    # Try multiple task names for compatibility across transformers versions
+    task_options = [
+        ("text2text-generation", {"model": "google/flan-t5-large", "max_new_tokens": 256}),
+        ("text-generation",      {"model": "gpt2", "max_new_tokens": 256}),
+        ("summarization",        {"model": "facebook/bart-large-cnn", "max_length": 256}),
+    ]
+    for task, kwargs in task_options:
+        try:
+            return pipeline(task, **kwargs), task
+        except Exception:
+            continue
+    raise RuntimeError("Could not load any text generation model. Run: pip install transformers --upgrade")
 
 # =========================================================
 # INTENT DETECTOR
@@ -199,6 +209,26 @@ def create_vectorstore(text: str):
     return FAISS.from_documents(docs, emb)
 
 # =========================================================
+# MODEL RUNNER — handles all pipeline task types uniformly
+# =========================================================
+def run_model(pipe_and_task, prompt: str) -> str:
+    """Call the pipeline regardless of task type and return plain text."""
+    pipe, task = pipe_and_task
+    try:
+        out = pipe(prompt, max_new_tokens=256)[0]
+        if "generated_text" in out:
+            text = out["generated_text"]
+            # text-generation echoes the prompt — strip it
+            if task == "text-generation" and text.startswith(prompt):
+                text = text[len(prompt):].strip()
+            return text.strip()
+        if "summary_text" in out:
+            return out["summary_text"].strip()
+        return str(next(iter(out.values()))).strip()
+    except Exception as e:
+        return f"Model error: {e}"
+
+# =========================================================
 # RAG QUERY HELPER
 # =========================================================
 def rag_query(question, vectorstore, model, context_override=None):
@@ -217,7 +247,7 @@ def rag_query(question, vectorstore, model, context_override=None):
         "If the answer is not in the context, say 'Not found in document'.\n\n"
         f"CONTEXT:\n{context}\n\nQUESTION: {question}\n\nANSWER:"
     )
-    answer = model(prompt)[0]["generated_text"]
+    answer = run_model(model, prompt)
     return answer, docs
 
 # =========================================================
@@ -340,7 +370,7 @@ def universal_answer(question, file_type, text, df, vectorstore, model):
             return "markdown", fmt_list(lines, label="Slide Text Items")
         if intent == "summary":
             prompt = f"Summarize this PowerPoint presentation slide by slide:\n\n{text[:4000]}"
-            result = model(prompt)[0]["generated_text"]
+            result = run_model(model, prompt)
             return "markdown", result
         if intent == "count":
             slide_count = text.count("SLIDE ")
@@ -368,7 +398,7 @@ def universal_answer(question, file_type, text, df, vectorstore, model):
 
         if intent == "summary":
             prompt = f"Summarize this document clearly and concisely:\n\n{text[:4000]}"
-            result = model(prompt)[0]["generated_text"]
+            result = run_model(model, prompt)
             return "markdown", result
 
         answer, docs = rag_query(question, vectorstore, model)
