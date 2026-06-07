@@ -3,6 +3,7 @@ import tempfile
 import os
 import json
 import re
+import numpy as np
 import pandas as pd
 from PIL import Image
 from docx import Document
@@ -187,10 +188,15 @@ def extract_text(uploaded_file, file_type: str) -> str:
             text = "\n".join(parts)
 
         elif file_type in IMAGE_EXT:
-            img     = Image.open(uploaded_file)
+            # Save to temp file — easyocr works most reliably with a file path
+            suffix = "." + file_type
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(uploaded_file.read())
+                img_path = tmp.name
             reader  = load_ocr()
-            results = reader.readtext(img)
+            results = reader.readtext(img_path)
             text    = " ".join(r[1] for r in results)
+            os.unlink(img_path)
 
     except Exception as e:
         st.error(f"Error reading file: {e}")
