@@ -12,6 +12,7 @@ import easyocr
 
 from langchain.schema import Document as LangDocument
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -72,8 +73,8 @@ h1{
 st.title("🤖 Universal AI File Chatbot")
 
 st.write("""
-Upload PDF, DOCX, TXT, CSV, XLSX, PPTX, JSON, XML,
-Markdown or Images and ask questions using AI-powered RAG.
+Upload PDF, DOCX, TXT, CSV, XLSX, PPTX, JSON,
+XML, Markdown or Images and ask questions using AI-powered RAG.
 """)
 
 # =========================================================
@@ -82,7 +83,7 @@ Markdown or Images and ask questions using AI-powered RAG.
 @st.cache_resource
 def load_ocr():
     return easyocr.Reader(
-        ['en'],
+        ["en"],
         gpu=False
     )
 
@@ -92,26 +93,15 @@ def load_ocr():
 @st.cache_resource
 def load_model():
 
-    try:
-        pipe = pipeline(
-            task="text2text-generation",
-            model="google/flan-t5-base",
-            tokenizer="google/flan-t5-base",
-            max_new_tokens=200,
-            do_sample=False
-        )
-
-    except Exception:
-
-        pipe = pipeline(
-            task="text-generation",
-            model="google/flan-t5-base",
-            max_new_tokens=200,
-            do_sample=False
-        )
+    pipe = pipeline(
+        "text2text-generation",
+        model="google/flan-t5-base",
+        tokenizer="google/flan-t5-base",
+        max_new_tokens=200,
+        do_sample=False
+    )
 
     return pipe
-
 
 # =========================================================
 # TEXT EXTRACTION
@@ -139,11 +129,13 @@ def extract_text(uploaded_file):
 
             docs = loader.load()
 
-            text = "\n".join([
-                doc.page_content.strip()
-                for doc in docs
-                if doc.page_content.strip()
-            ])
+            text = "\n".join(
+                [
+                    doc.page_content.strip()
+                    for doc in docs
+                    if doc.page_content.strip()
+                ]
+            )
 
             os.unlink(tmp_path)
 
@@ -152,11 +144,13 @@ def extract_text(uploaded_file):
 
             doc = Document(uploaded_file)
 
-            text = "\n".join([
-                para.text.strip()
-                for para in doc.paragraphs
-                if para.text.strip()
-            ])
+            text = "\n".join(
+                [
+                    para.text.strip()
+                    for para in doc.paragraphs
+                    if para.text.strip()
+                ]
+            )
 
         # TXT / MD
         elif file_type in ["txt", "md"]:
@@ -213,11 +207,13 @@ def extract_text(uploaded_file):
 
             for _, row in df.iterrows():
 
-                row_text = " | ".join([
-                    f"{col}: {str(row[col]).strip()}"
-                    for col in df.columns
-                    if str(row[col]).strip()
-                ])
+                row_text = " | ".join(
+                    [
+                        f"{col}: {str(row[col]).strip()}"
+                        for col in df.columns
+                        if str(row[col]).strip()
+                    ]
+                )
 
                 rows.append(row_text)
 
@@ -245,13 +241,15 @@ def extract_text(uploaded_file):
 
                 for _, row in df.iterrows():
 
-                    row_text = " | ".join([
-                        f"{col}: {str(row[col]).strip()}"
-                        for col in df.columns
-                        if str(row[col]).strip()
-                    ])
+                    row_text = " | ".join(
+                        [
+                            f"{col}: {str(row[col]).strip()}"
+                            for col in df.columns
+                            if str(row[col]).strip()
+                        ]
+                    )
 
-                    if row_text.strip():
+                    if row_text:
                         all_rows.append(row_text)
 
             text = "\n".join(all_rows)
@@ -266,7 +264,7 @@ def extract_text(uploaded_file):
             for i, slide in enumerate(prs.slides):
 
                 slides_text.append(
-                    f"===== SLIDE {i+1} ====="
+                    f"===== SLIDE {i + 1} ====="
                 )
 
                 for shape in slide.shapes:
@@ -288,12 +286,14 @@ def extract_text(uploaded_file):
 
             reader = load_ocr()
 
-            result = reader.readtext(image)
+            results = reader.readtext(image)
 
-            text = "\n".join([
-                item[1]
-                for item in result
-            ])
+            text = "\n".join(
+                [
+                    item[1]
+                    for item in results
+                ]
+            )
 
         return text.strip()
 
@@ -304,6 +304,7 @@ def extract_text(uploaded_file):
         )
 
         return ""
+
 # =========================================================
 # VECTORSTORE
 # =========================================================
@@ -311,18 +312,17 @@ def extract_text(uploaded_file):
 def create_vectorstore(text):
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=600,
-        chunk_overlap=100,
-        separators=["\n\n", "\n", ".", " "]
+        chunk_size=800,
+        chunk_overlap=100
     )
 
     chunks = splitter.split_text(text)
 
-    chunks = list(set([
+    chunks = [
         chunk.strip()
         for chunk in chunks
         if chunk.strip()
-    ]))
+    ]
 
     docs = [
         LangDocument(page_content=chunk)
@@ -340,7 +340,6 @@ def create_vectorstore(text):
 
     return vectorstore
 
-
 # =========================================================
 # ASK QUESTION
 # =========================================================
@@ -356,57 +355,13 @@ def ask_question(
 
     docs = retriever.invoke(question)
 
-    context = "\n\n".join([
-        doc.page_content
-        for doc in docs
-    ])
+    context = "\n\n".join(
+        [
+            doc.page_content
+            for doc in docs
+        ]
+    )
 
-    lower_question = question.lower()
-
-    summary_questions = [
-        "what is in the file",
-        "summary",
-        "summarize",
-        "describe file",
-        "about file",
-        "company names",
-        "which companies",
-        "list company"
-    ]
-
-    # =====================================================
-    # SUMMARY MODE
-    # =====================================================
-    if any(
-        q in lower_question
-        for q in summary_questions
-    ):
-
-        lines = []
-
-        for line in context.split("\n"):
-
-            line = line.strip()
-
-            if (
-                len(line) > 5
-                and line not in lines
-            ):
-                lines.append(line)
-
-        summary = "\n".join([
-            f"• {line}"
-            for line in lines[:20]
-        ])
-
-        return (
-            f"### File Summary\n\n{summary}",
-            docs
-        )
-
-    # =====================================================
-    # PROMPT
-    # =====================================================
     prompt = f"""
 You are an intelligent AI document assistant.
 
@@ -416,9 +371,8 @@ Rules:
 1. Give accurate answers.
 2. Do not hallucinate.
 3. If answer is not found say:
-"I could not find that information in the uploaded file."
+'I could not find that information in the uploaded file.'
 4. Keep answers short and clear.
-5. Format answers cleanly.
 
 Context:
 {context}
@@ -433,38 +387,13 @@ Answer:
 
         result = model(prompt)
 
-        if isinstance(result, list):
-
-            if "generated_text" in result[0]:
-
-                answer = result[0][
-                    "generated_text"
-                ]
-
-            elif "summary_text" in result[0]:
-
-                answer = result[0][
-                    "summary_text"
-                ]
-
-            else:
-
-                answer = str(result[0])
-
-        else:
-
-            answer = str(result)
+        answer = result[0]["generated_text"]
 
     except Exception as e:
 
-        answer = (
-            f"Error generating answer: "
-            f"{str(e)}"
-        )
+        answer = f"Error generating answer: {str(e)}"
 
     return answer, docs
-
-
 # =========================================================
 # FILE UPLOADER
 # =========================================================
@@ -487,96 +416,98 @@ uploaded_file = st.file_uploader(
     ]
 )
 
-
 # =========================================================
 # MAIN APP
 # =========================================================
 if uploaded_file:
 
-    if (
-        st.session_state.last_file
-        != uploaded_file.name
-    ):
+    if st.session_state.last_file != uploaded_file.name:
 
         st.session_state.answer = ""
         st.session_state.docs = []
+        st.session_state.last_file = uploaded_file.name
 
-        st.session_state.last_file = (
-            uploaded_file.name
-        )
-
-    with st.spinner(
-        "📚 Reading file..."
-    ):
-
-        text = extract_text(
-            uploaded_file
-        )
+    # =========================================
+    # READ FILE
+    # =========================================
+    with st.spinner("📚 Reading file..."):
+        text = extract_text(uploaded_file)
 
     if text:
 
-        with st.spinner(
-            "🧠 Building AI knowledge base..."
-        ):
+        # =========================================
+        # BUILD VECTORSTORE
+        # =========================================
+        with st.spinner("🧠 Building AI knowledge base..."):
 
-            vectorstore = (
-                create_vectorstore(text)
-            )
-
+            vectorstore = create_vectorstore(text)
             model = load_model()
 
-        st.success(
-            "✅ File uploaded successfully!"
-        )
+        st.success("✅ File uploaded successfully!")
 
-        file_type = (
-            uploaded_file.name
-            .split(".")[-1]
-            .lower()
-        )
+        file_type = uploaded_file.name.split(".")[-1].lower()
 
-        # =====================================
+        # =========================================
+        # FILE INFO
+        # =========================================
+        with st.sidebar:
+
+            st.header("📁 File Information")
+
+            st.write(
+                f"**File Name:** {uploaded_file.name}"
+            )
+
+            st.write(
+                f"**File Type:** {file_type.upper()}"
+            )
+
+            st.write(
+                f"**Extracted Characters:** {len(text)}"
+            )
+
+        # =========================================
         # FILE PREVIEW
-        # =====================================
-        with st.expander(
-            "📄 File Preview"
-        ):
+        # =========================================
+        with st.expander("📄 File Preview", expanded=False):
 
             if file_type == "csv":
 
                 uploaded_file.seek(0)
 
-                df = pd.read_csv(
-                    uploaded_file
-                )
+                try:
+                    df = pd.read_csv(uploaded_file)
+                    st.dataframe(
+                        df,
+                        use_container_width=True
+                    )
+                except Exception as e:
+                    st.error(str(e))
 
-                st.dataframe(df)
-
-            elif file_type in [
-                "xlsx",
-                "xls"
-            ]:
+            elif file_type in ["xlsx", "xls"]:
 
                 uploaded_file.seek(0)
 
-                excel_data = (
-                    pd.read_excel(
+                try:
+
+                    sheets = pd.read_excel(
                         uploaded_file,
                         sheet_name=None
                     )
-                )
 
-                for (
-                    sheet_name,
-                    df
-                ) in excel_data.items():
+                    for sheet_name, df in sheets.items():
 
-                    st.subheader(
-                        f"📑 Sheet: "
-                        f"{sheet_name}"
-                    )
+                        st.subheader(
+                            f"📑 {sheet_name}"
+                        )
 
-                    st.dataframe(df)
+                        st.dataframe(
+                            df,
+                            use_container_width=True
+                        )
+
+                except Exception as e:
+                    st.error(str(e))
 
             elif file_type in [
                 "png",
@@ -586,86 +517,75 @@ if uploaded_file:
 
                 uploaded_file.seek(0)
 
-                image = Image.open(
-                    uploaded_file
-                )
+                image = Image.open(uploaded_file)
 
                 st.image(
                     image,
                     use_container_width=True
                 )
 
-                st.write(
-                    text[:3000]
-                )
+                st.markdown("### Extracted Text")
+
+                st.write(text[:3000])
 
             elif file_type == "json":
 
                 uploaded_file.seek(0)
 
-                data = json.load(
-                    uploaded_file
-                )
-
-                st.json(data)
+                try:
+                    data = json.load(uploaded_file)
+                    st.json(data)
+                except:
+                    st.write(text[:3000])
 
             else:
 
-                st.write(
-                    text[:3000]
-                )
+                st.write(text[:3000])
 
-        # =====================================
+        # =========================================
         # QUESTION INPUT
-        # =====================================
+        # =========================================
+        st.markdown("---")
+
         question = st.text_input(
-            "💬 Ask a question"
+            "💬 Ask a question about the uploaded file"
         )
 
+        # =========================================
+        # GENERATE ANSWER
+        # =========================================
         if question:
 
-            with st.spinner(
-                "🔍 Finding answer..."
-            ):
+            with st.spinner("🔍 Searching document..."):
 
-                (
-                    answer,
-                    docs
-                ) = ask_question(
+                answer, docs = ask_question(
                     vectorstore,
                     question,
                     model
                 )
 
-                st.session_state.answer = (
-                    answer
-                )
+                st.session_state.answer = answer
+                st.session_state.docs = docs
 
-                st.session_state.docs = (
-                    docs
-                )
-
-        # =====================================
-        # SHOW ANSWER
-        # =====================================
+        # =========================================
+        # DISPLAY ANSWER
+        # =========================================
         if st.session_state.answer:
 
-            st.subheader(
-                "🤖 Answer"
-            )
+            st.subheader("🤖 Answer")
 
             st.write(
                 st.session_state.answer
             )
 
+            # =====================================
+            # SOURCE CHUNKS
+            # =====================================
             with st.expander(
                 "📌 Source Chunks Used"
             ):
 
-                for (
-                    i,
-                    doc
-                ) in enumerate(
+                for i, doc in enumerate(
                     st.session_state.docs
                 ):
 
@@ -674,9 +594,7 @@ if uploaded_file:
                     )
 
                     st.write(
-                        doc.page_content[
-                            :1000
-                        ]
+                        doc.page_content[:1000]
                     )
 
                     st.divider()
@@ -684,13 +602,11 @@ if uploaded_file:
     else:
 
         st.error(
-            "❌ No readable "
-            "content found."
+            "❌ No readable content found."
         )
 
 else:
 
     st.info(
-        "📂 Upload a file "
-        "to begin."
+        "📂 Upload a file to begin."
     )
