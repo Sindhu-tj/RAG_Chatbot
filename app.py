@@ -2,6 +2,7 @@ import streamlit as st
 import tempfile
 import os
 import json
+import numpy as np
 import pandas as pd
 import xml.etree.ElementTree as ET
 
@@ -94,12 +95,62 @@ def load_ocr():
 def load_model():
 
     pipe = pipeline(
-    "text-generation",
-    model="gpt2",
-    max_new_tokens=200
-)
+        "text-generation",
+        model="gpt2",
+        max_new_tokens=200
+    )
 
     return pipe
+
+# =========================================================
+# HELPER: SAFE DATAFRAME DISPLAY
+# =========================================================
+def safe_df_display(df):
+    """
+    st.dataframe() uses a pyarrow backend under the hood.
+    Columns with mixed types (e.g. dates mixed with strings/NaN,
+    or Excel columns that come back as datetime.datetime objects
+    inside an 'object' dtype column) crash pyarrow's type
+    inference with errors like:
+        ArrowTypeError: Expected bytes, got a 'datetime.datetime' object
+    Converting everything to a clean string representation avoids
+    this without needing to know the offending column ahead of time.
+    """
+    safe_df = df.copy()
+
+    for col in safe_df.columns:
+        try:
+            # Try to keep numeric columns numeric for nicer display
+            if pd.api.types.is_numeric_dtype(safe_df[col]):
+                continue
+            safe_df[col] = safe_df[col].astype(str)
+        except Exception:
+            safe_df[col] = safe_df[col].apply(
+                lambda x: "" if pd.isna(x) else str(x)
+            )
+
+    return safe_df
+
+
+def read_excel_any(file_obj, filename, sheet_name=None):
+    """
+    pd.read_excel needs the right engine depending on the file
+    extension:
+      - .xlsx / .xlsm -> openpyxl
+      - .xls (legacy)  -> xlrd
+    Without specifying this explicitly, legacy .xls uploads fail.
+    """
+    ext = filename.split(".")[-1].lower()
+    engine = "xlrd" if ext == "xls" else "openpyxl"
+
+    file_obj.seek(0)
+
+    try:
+        return pd.read_excel(file_obj, sheet_name=sheet_name, engine=engine)
+    except Exception:
+        # Fallback: let pandas guess if the explicit engine choice fails
+        file_obj.seek(0)
+        return pd.read_excel(file_obj, sheet_name=sheet_name)
 
 # =========================================================
 # TEXT EXTRACTION
@@ -114,6 +165,8 @@ def extract_text(uploaded_file):
 
         # PDF
         if file_type == "pdf":
+
+            uploaded_file.seek(0)
 
             with tempfile.NamedTemporaryFile(
                 delete=False,
@@ -140,6 +193,8 @@ def extract_text(uploaded_file):
         # DOCX
         elif file_type == "docx":
 
+            uploaded_file.seek(0)
+
             doc = Document(uploaded_file)
 
             text = "\n".join(
@@ -152,6 +207,8 @@ def extract_text(uploaded_file):
 
         # TXT / MD
         elif file_type in ["txt", "md"]:
+
+            uploaded_file.seek(0)
 
             text = uploaded_file.read().decode(
                 "utf-8",
@@ -197,7 +254,11 @@ def extract_text(uploaded_file):
 
             uploaded_file.seek(0)
 
-            df = pd.read_csv(uploaded_file)
+            try:
+                df = pd.read_csv(uploaded_file)
+            except UnicodeDecodeError:
+                uploaded_file.seek(0)
+                df = pd.read_csv(uploaded_file, encoding="latin1")
 
             df = df.fillna("")
 
@@ -220,10 +281,9 @@ def extract_text(uploaded_file):
         # XLSX / XLS
         elif file_type in ["xlsx", "xls"]:
 
-            uploaded_file.seek(0)
-
-            excel_data = pd.read_excel(
+            excel_data = read_excel_any(
                 uploaded_file,
+                uploaded_file.name,
                 sheet_name=None
             )
 
@@ -255,6 +315,8 @@ def extract_text(uploaded_file):
         # PPTX
         elif file_type == "pptx":
 
+            uploaded_file.seek(0)
+
             prs = Presentation(uploaded_file)
 
             slides_text = []
@@ -280,11 +342,19 @@ def extract_text(uploaded_file):
         # IMAGE OCR
         elif file_type in ["png", "jpg", "jpeg"]:
 
+            uploaded_file.seek(0)
+
             image = Image.open(uploaded_file)
+            image = image.convert("RGB")
 
             reader = load_ocr()
 
-            results = reader.readtext(image)
+            # easyocr needs a NumPy array (or path/bytes) — NOT a PIL
+            # Image object. Passing the PIL Image directly is the bug
+            # that made png/jpg/jpeg extraction silently fail.
+            image_np = np.array(image)
+
+            results = reader.readtext(image_np)
 
             text = "\n".join(
                 [
@@ -474,9 +544,14 @@ if uploaded_file:
                 uploaded_file.seek(0)
 
                 try:
-                    df = pd.read_csv(uploaded_file)
+                    try:
+                        df = pd.read_csv(uploaded_file)
+                    except UnicodeDecodeError:
+                        uploaded_file.seek(0)
+                        df = pd.read_csv(uploaded_file, encoding="latin1")
+
                     st.dataframe(
-                        df,
+                        safe_df_display(df),
                         use_container_width=True
                     )
                 except Exception as e:
@@ -484,12 +559,11 @@ if uploaded_file:
 
             elif file_type in ["xlsx", "xls"]:
 
-                uploaded_file.seek(0)
-
                 try:
 
-                    sheets = pd.read_excel(
+                    sheets = read_excel_any(
                         uploaded_file,
+                        uploaded_file.name,
                         sheet_name=None
                     )
 
@@ -500,7 +574,7 @@ if uploaded_file:
                         )
 
                         st.dataframe(
-                            df,
+                            safe_df_display(df),
                             use_container_width=True
                         )
 
@@ -516,6 +590,7 @@ if uploaded_file:
                 uploaded_file.seek(0)
 
                 image = Image.open(uploaded_file)
+                image = image.convert("RGB")
 
                 st.image(
                     image,
@@ -533,7 +608,7 @@ if uploaded_file:
                 try:
                     data = json.load(uploaded_file)
                     st.json(data)
-                except:
+                except Exception:
                     st.write(text[:3000])
 
             else:
