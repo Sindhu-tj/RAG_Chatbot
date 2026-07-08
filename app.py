@@ -11,11 +11,29 @@ from docx import Document
 from pptx import Presentation
 import easyocr
 
-from langchain.schema import Document as LangDocument
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+# Modern langchain (1.x+) split Document and the text splitter out of the
+# core "langchain" package into separate packages. Fall back to the old
+# paths for anyone still on an older langchain version.
+try:
+    from langchain_core.documents import Document as LangDocument
+except ImportError:
+    from langchain.schema import Document as LangDocument
+
+try:
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+except ImportError:
+    from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_community.embeddings import HuggingFaceEmbeddings
+
+# langchain_community's embeddings wrapper is being sunset in favor of the
+# standalone langchain_huggingface package. Prefer the new one, fall back
+# to the old one if it isn't installed.
+try:
+    from langchain_huggingface import HuggingFaceEmbeddings
+except ImportError:
+    from langchain_community.embeddings import HuggingFaceEmbeddings
+
 from langchain_community.vectorstores import FAISS
 
 from transformers import pipeline

@@ -7,7 +7,10 @@ easyocr
 xlrd
 openpyxl
 langchain
+langchain-core
+langchain-text-splitters
 langchain-community
+langchain-huggingface
 transformers
 torch
 sentence-transformers
